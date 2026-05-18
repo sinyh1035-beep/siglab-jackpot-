@@ -613,7 +613,7 @@ def main():
     fundamentals = fetch_fundamentals(prices)
     foreign = fetch_foreign(prices)
     kis_data = fetch_kis_data(prices)
-    dart_data = fetch_dart_data(prices)
+    dart_data = {}  # DART 임시 스킵 (속도 개선)
     results = analyze(prices, fundamentals, foreign, kis_data, dart_data, kospi_3y)
     save_and_upload(results, kospi_3y)
     
