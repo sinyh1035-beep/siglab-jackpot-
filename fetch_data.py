@@ -1,10 +1,10 @@
 """
-SIGVIEW 잭팟 스캐너 v3.7.1 - 기러기 점수 버그 수정본
+SIGVIEW 잭팟 스캐너 v3.7.2
 ==========================================
-v3.7.0 → v3.7.1 변경 사항:
-  ✅ 일봉 [-250:] 슬라이싱 제거 (252 체크 통과)
-  ✅ 주봉 기준 점수 사용 (백테스트와 일치)
-  ✅ 시간대별 점수 중 최대값 사용
+변경: 일/주/월봉 차트 데이터 + 날짜 모두 저장
+  - 일봉 252개 (1년)
+  - 주봉 260개 (5년)
+  - 월봉 120개 (10년)
 """
 
 import json
@@ -30,7 +30,6 @@ except ImportError:
 from kis_client import KISClient
 from dart_client import DARTClient
 
-# ===== 환경설정 =====
 FTP_HOST = os.environ.get('FTP_HOST', '')
 FTP_USER = os.environ.get('FTP_USER', '')
 FTP_PASS = os.environ.get('FTP_PASS', '')
@@ -39,7 +38,6 @@ FTP_TARGET_DIR = os.environ.get('FTP_TARGET_DIR', '/wp-content/data')
 THRESHOLD = 500_000_000_000
 OUTPUT_FILE = 'jackpot.json'
 
-# ===== 2001~2010 빅사이클 골든 리스트 =====
 GOLDEN_LIST_2001_2008 = {
     '005880': {'name': '대한해운', 'multi': 93, 'peak': '2007-10'},
     '028670': {'name': '팬오션', 'multi': 2.4, 'peak': '2007-10'},
@@ -87,7 +85,8 @@ def get_kospi_3y_return():
     return 200
 
 def fetch_prices(stocks):
-    log(f"Step 3/9: 가격 5년치 일봉 ({len(stocks)}종목)...")
+    """★ v3.7.2: 10년치 일봉 받기 (월봉 산출용)"""
+    log(f"Step 3/9: 가격 10년치 일봉 ({len(stocks)}종목)...")
     all_data = {}
     BATCH = 50
     t0 = time.time()
@@ -95,7 +94,7 @@ def fetch_prices(stocks):
         batch = stocks.iloc[i:i+BATCH]
         codes_yf = [f"{row['Code']}.{'KS' if row['Market']=='KOSPI' else 'KQ'}" for _, row in batch.iterrows()]
         try:
-            data = yf.download(codes_yf, period='5y', interval='1d', group_by='ticker',
+            data = yf.download(codes_yf, period='10y', interval='1d', group_by='ticker',
                               progress=False, threads=True, auto_adjust=True)
         except:
             continue
@@ -199,21 +198,16 @@ def fetch_kis_data(price_data):
     return result
 
 # ============================================================
-# v3.7.1 핵심 알고리즘
+# 알고리즘
 # ============================================================
 
 def goose_score_v37(closes, vols):
-    """
-    기러기 1단계 자리 판정 (0~100점)
-    ★ v3.7.1 수정: 60개 이상이면 작동 (이전엔 252개 필요)
-    """
-    if len(closes) < 60: return 0, {}   # ← ★ 252 → 60으로 완화
+    if len(closes) < 60: return 0, {}
     
     closes_arr = np.array(closes)
     score = 0
     breakdown = {}
     
-    # 1. CV (변동성) - 가능한 만큼 사용 (1년 또는 전체)
     window_len = min(252, len(closes_arr))
     window = closes_arr[-window_len:]
     cv_1y = np.std(window) / np.mean(window)
@@ -224,9 +218,7 @@ def goose_score_v37(closes, vols):
     else: comp_s = 0
     score += comp_s
     breakdown['cv_1y'] = round(cv_1y, 3)
-    breakdown['compression'] = comp_s
     
-    # 2. 고점 대비
     high_recent = np.max(window)
     from_high = (closes_arr[-1] - high_recent) / high_recent * 100
     if -50 <= from_high <= -25: dd_s = 25
@@ -237,9 +229,7 @@ def goose_score_v37(closes, vols):
     else: dd_s = 5
     score += dd_s
     breakdown['from_1y_high'] = round(from_high, 1)
-    breakdown['drawdown'] = dd_s
     
-    # 3. 60일선 대비
     if len(closes_arr) >= 60:
         ma60 = np.mean(closes_arr[-60:])
         from_ma60 = (closes_arr[-1] - ma60) / ma60 * 100
@@ -250,9 +240,7 @@ def goose_score_v37(closes, vols):
         else: ma_s = 3
         score += ma_s
         breakdown['from_ma60'] = round(from_ma60, 1)
-        breakdown['ma_position'] = ma_s
     
-    # 4. 거래량 surge
     if len(vols) >= 60:
         recent_v = np.mean(vols[-20:])
         prev_v = np.mean(vols[-60:-20])
@@ -264,7 +252,6 @@ def goose_score_v37(closes, vols):
         else: vol_s = 3
         score += vol_s
         breakdown['vol_ratio'] = round(vol_ratio, 2)
-        breakdown['volume'] = vol_s
     
     return score, breakdown
 
@@ -333,31 +320,37 @@ def cubic_stage(prices):
             dist = 1 - l_min
             if l_max is not None and 1 < l_max < 1.5:
                 ratio = dist / (l_max - l_min)
-                if ratio < 0.20: st, sn = "1단계", 1
-                elif ratio < 0.50: st, sn = "2단계", 2
-                elif ratio < 0.80: st, sn = "2단계후", 2.5
-                else: st, sn = "3단계", 3
+                if ratio < 0.20: st = "1단계"
+                elif ratio < 0.50: st = "2단계"
+                elif ratio < 0.80: st = "2단계후"
+                else: st = "3단계"
             else:
-                if dist < 0.20 and curv > 0: st, sn = "1단계", 1
-                elif curv > 0: st, sn = "2단계", 2
-                else: st, sn = "3단계", 3
-        elif slope < 0 and curv > 0: st, sn = "바닥형성", 0.5
-        elif slope < 0: st, sn = "하락", 0
-        elif slope > 0 and curv > 0: st, sn = "가속", 1.5
-        else: st, sn = "감속", 3
-        return {'st': st, 'sn': sn}
+                if dist < 0.20 and curv > 0: st = "1단계"
+                elif curv > 0: st = "2단계"
+                else: st = "3단계"
+        elif slope < 0 and curv > 0: st = "바닥형성"
+        elif slope < 0: st = "하락"
+        elif slope > 0 and curv > 0: st = "가속"
+        else: st = "감속"
+        return {'st': st}
     except:
         return None
 
 def resample(closes, dates, freq):
+    """Resample with dates"""
     df = pd.DataFrame({'c': closes}, index=pd.to_datetime(dates))
-    return df.resample(freq).last().dropna()['c'].tolist()
+    rs = df.resample(freq).last().dropna()
+    return rs['c'].tolist(), [d.strftime('%Y-%m-%d') for d in rs.index]
+
+def resample_vol(vols, dates, freq):
+    df = pd.DataFrame({'v': vols}, index=pd.to_datetime(dates))
+    return df.resample(freq).sum().dropna()['v'].tolist()
 
 # ============================================================
 # Step 8: 종합 분석
 # ============================================================
 def analyze(price_data, fundamentals, foreign, kis_data, dart_data, kospi_3y):
-    log(f"Step 8/9: v3.7.1 종합 분석 (5중 곱셈)...")
+    log(f"Step 8/9: v3.7.2 종합 분석 (일/주/월 차트 데이터)...")
     t0 = time.time()
     results = {}
     
@@ -366,7 +359,7 @@ def analyze(price_data, fundamentals, foreign, kis_data, dart_data, kospi_3y):
             closes = info['closes']
             vols = info['vols']
             dates = info['dates']
-            if len(closes) < 60: continue   # ★ 60일 이상 데이터만
+            if len(closes) < 60: continue
             
             # 종목 3년 수익률
             if len(closes) >= 756:
@@ -374,29 +367,30 @@ def analyze(price_data, fundamentals, foreign, kis_data, dart_data, kospi_3y):
             else:
                 stock_3y = (closes[-1] - closes[0]) / closes[0] * 100
             
-            # === 기러기 점수: 일/주/월봉 모두 계산 ===
-            # ★ v3.7.1: 슬라이싱 제거, 전체 데이터 사용
-            d_goose, d_bd = goose_score_v37(closes, vols)
+            # === 일봉 점수 ===
+            d_goose, _ = goose_score_v37(closes, vols)
             d_stage = cubic_stage(closes[-120:] if len(closes) >= 120 else closes)
             
-            w_closes = resample(closes, dates, 'W')
-            w_vols = resample(vols, dates, 'W')
-            w_goose, w_bd = goose_score_v37(w_closes, w_vols)
+            # === 주봉 ===
+            w_closes, w_dates = resample(closes, dates, 'W')
+            w_vols = resample_vol(vols, dates, 'W')
+            w_goose, _ = goose_score_v37(w_closes, w_vols)
             w_stage = cubic_stage(w_closes[-80:] if len(w_closes) >= 80 else w_closes)
             
-            m_closes = resample(closes, dates, 'ME')
-            m_vols = resample(vols, dates, 'ME')
-            m_goose, m_bd = goose_score_v37(m_closes, m_vols)
+            # === 월봉 ===
+            m_closes, m_dates = resample(closes, dates, 'ME')
+            m_vols = resample_vol(vols, dates, 'ME')
+            m_goose, _ = goose_score_v37(m_closes, m_vols)
             m_stage = cubic_stage(m_closes)
             
-            if not d_stage: d_stage = {'st': '?', 'sn': 0}
-            if not w_stage: w_stage = {'st': '?', 'sn': 0}
-            if not m_stage: m_stage = {'st': '?', 'sn': 0}
+            if not d_stage: d_stage = {'st': '?'}
+            if not w_stage: w_stage = {'st': '?'}
+            if not m_stage: m_stage = {'st': '?'}
             
-            # ★ v3.7.1: 일/주/월봉 중 최대값 사용 (가장 강한 시그널)
+            # 일/주/월 최대값
             goose_total = max(d_goose, w_goose, m_goose)
             
-            # === 배수 계산 ===
+            # === 배수 ===
             f = fundamentals.get(code, {})
             psr = f.get('psr')
             psr_m = psr_multiplier(psr)
@@ -409,10 +403,21 @@ def analyze(price_data, fundamentals, foreign, kis_data, dart_data, kospi_3y):
             macro_m = macro_gap_multiplier(stock_3y, kospi_3y)
             gold_m = golden_multiplier(code)
             
-            # === 최종 잭팟 점수 ===
             jackpot = round(goose_total * psr_m * fr_m * macro_m * gold_m)
             
-            chart = [int(c) for c in (w_closes[-50:] if len(w_closes) >= 50 else w_closes)]
+            # ★ v3.7.2: 일/주/월 차트 데이터 (날짜 포함)
+            # 일봉: 최근 252개 (1년)
+            d_chart = [int(c) for c in (closes[-252:] if len(closes) >= 252 else closes)]
+            d_chart_dates = dates[-252:] if len(dates) >= 252 else dates
+            
+            # 주봉: 최근 260개 (5년)
+            w_chart = [int(c) for c in (w_closes[-260:] if len(w_closes) >= 260 else w_closes)]
+            w_chart_dates = w_dates[-260:] if len(w_dates) >= 260 else w_dates
+            
+            # 월봉: 최근 120개 (10년)
+            m_chart = [int(c) for c in (m_closes[-120:] if len(m_closes) >= 120 else m_closes)]
+            m_chart_dates = m_dates[-120:] if len(m_dates) >= 120 else m_dates
+            
             golden = GOLDEN_LIST_2001_2008.get(code)
             
             results[code] = {
@@ -427,10 +432,18 @@ def analyze(price_data, fundamentals, foreign, kis_data, dart_data, kospi_3y):
                 'macro_mult': round(macro_m, 2),
                 'golden_mult': round(gold_m, 2),
                 'ta_mult': 1.0,
-                'd': {'g': d_goose, 'st': d_stage['st'], 'sn': d_stage['sn']},
-                'w': {'g': w_goose, 'st': w_stage['st'], 'sn': w_stage['sn']},
-                'mo': {'g': m_goose, 'st': m_stage['st'], 'sn': m_stage['sn']},
-                'c': chart,
+                'd': {'g': d_goose, 'st': d_stage['st']},
+                'w': {'g': w_goose, 'st': w_stage['st']},
+                'mo': {'g': m_goose, 'st': m_stage['st']},
+                # ★ 차트 데이터 (일/주/월)
+                'cd': d_chart,
+                'cdt': d_chart_dates,
+                'cw': w_chart,
+                'cwt': w_chart_dates,
+                'cm': m_chart,
+                'cmt': m_chart_dates,
+                # 호환성용 (기존 c 유지)
+                'c': w_chart[-50:] if len(w_chart) >= 50 else w_chart,
                 'h': int(max(closes)),
                 'l': int(min(closes)),
                 'psr': round(psr, 2) if psr else None,
@@ -463,7 +476,7 @@ def save_and_upload(results, kospi_3y):
     output = {
         'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'count': len(results),
-        'version': 'v3.7.1',
+        'version': 'v3.7.2',
         'kospi_3y_return': round(kospi_3y, 1),
         'data': results,
     }
@@ -495,7 +508,7 @@ def save_and_upload(results, kospi_3y):
 def main():
     start = time.time()
     log("=" * 60)
-    log(f"SIGVIEW 잭팟 스캐너 v3.7.1 - 갱신 시작")
+    log(f"SIGVIEW 잭팟 스캐너 v3.7.2 - 갱신 시작")
     log("=" * 60)
     
     stocks = get_stock_list()
@@ -504,7 +517,7 @@ def main():
     fundamentals = fetch_fundamentals(prices)
     foreign = fetch_foreign(prices)
     kis_data = fetch_kis_data(prices)
-    dart_data = {}  # DART 임시 스킵
+    dart_data = {}
     results = analyze(prices, fundamentals, foreign, kis_data, dart_data, kospi_3y)
     save_and_upload(results, kospi_3y)
     
