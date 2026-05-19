@@ -2,8 +2,7 @@ name: SIGVIEW 잭팟 시즌2 v2.0 (4차함수 c자리)
 
 on:
   schedule:
-    # 매주 토요일 18:00 UTC = 일요일 03:00 KST (시즌1과 다른 시간)
-    - cron: '0 19 * * 6'
+  - cron: '0 19 * * *'  # 매일 19:00 UTC = 다음날 04:00 KST
   workflow_dispatch:
 
 jobs:
