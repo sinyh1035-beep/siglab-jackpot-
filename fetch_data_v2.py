@@ -1,26 +1,13 @@
 """
-fetch_data_v2.py — SIGVIEW 잭팟 시즌2 v2.7 (검증된 최적 파라미터)
-===============================================================
-★ 9개 SSS+골든 종목으로 백테스팅 검증 완료 ★
+fetch_data_v2.py — SIGVIEW 잭팟 시즌2 v2.8
+==========================================
+변경 (v2.7 → v2.8):
+✅ watchlist.json 재사용 (시즌1과 동기화)
+✅ pykrx 시총 조회 실패 시 자동 fallback
+✅ 521개 종목 분석 (28개 → 521개)
+✅ 3가지 watchlist.json 구조 자동 인식
 
-검증 결과 (v2.6 → v2.7):
-- v2.6: 9개 중 5개만 통과 (56%)
-- v2.7: 9개 중 7개 통과 (78%) ★ 베스트
-
-변경 파라미터:
-- r2_min:    0.40 → 0.25  (POSCO 같은 변동성 큰 종목 포함)
-- c_min:     0.60 → 0.50  (c자리 위치 범위 확장)
-- ratio_min: -20% → -50%  (분할매수 시스템과 일치, 망한 종목만 배제)
-- 정렬 거리: 7/13/13 → 8/14/14 개월 (살짝 완화)
-
-검증된 통과 종목:
-✅ 롯데케미칼 ★★★★★ (-36.7%)
-✅ 금호석유   ★★★★  (-14.7%)
-✅ 현대제철   ★★★★★ (-14.3%)
-✅ S-Oil     ★★★    (-38.4%)
-✅ 대한해운   ★★★★  (-19.7%)
-✅ LX인터    ★★★★  (+10.8%)
-✅ 팬오션    ★★★★  (-10.2%)
+★ 진짜 시즌2 완성 — 시즌1과 동일한 종목 풀!
 """
 import os, json, time, warnings
 from datetime import datetime, timezone, timedelta
@@ -42,17 +29,15 @@ FTP_TARGET_DIR = os.environ.get('FTP_TARGET_DIR', '/public_html/wp-content/data'
 KST = timezone(timedelta(hours=9))
 TODAY = datetime.now(KST)
 
-# ============================================================
-# ★ v2.7 검증된 최적 파라미터
-# ============================================================
-R2_MIN = 0.25       # 0.40 → 0.25 (검증: POSCO 같은 변동성 큰 종목)
-C_MIN = 0.50        # 0.60 → 0.50 (검증: 진짜 c자리 위치)
-C_MAX = 0.95        # 그대로
-RATIO_MIN = -50.0   # -20 → -50 (검증: 분할매수 시스템 + 망한 거 배제)
-RATIO_MAX = 30.0    # 그대로
-ALIGN_DW_MAX = 8    # 일↔주 거리 (개월)
-ALIGN_WM_MAX = 14   # 주↔월
-ALIGN_DM_MAX = 14   # 일↔월
+# v2.7 검증된 최적 파라미터
+R2_MIN = 0.25
+C_MIN = 0.50
+C_MAX = 0.95
+RATIO_MIN = -50.0
+RATIO_MAX = 30.0
+ALIGN_DW_MAX = 8
+ALIGN_WM_MAX = 14
+ALIGN_DM_MAX = 14
 
 
 def get_recent_trading_day():
@@ -71,7 +56,6 @@ def get_recent_trading_day():
 TODAY_STR = get_recent_trading_day()
 print(f'[INIT] 분석 기준일: {TODAY_STR}')
 
-MAX_STOCKS = 500
 START_DATE = (TODAY - timedelta(days=5*365)).strftime('%Y%m%d')
 
 CHINA_DIRECT = {
@@ -81,29 +65,102 @@ CHINA_DIRECT = {
     '011200','028670','267250','003490','001120','001250','047050',
 }
 
-FALLBACK_STOCKS = [
-    ('005930','삼성전자'),('000660','SK하이닉스'),('373220','LG에너지솔루션'),
-    ('005380','현대차'),('000270','기아'),('005490','POSCO홀딩스'),
-    ('051910','LG화학'),('006400','삼성SDI'),('035420','NAVER'),
-    ('042700','한미반도체'),('329180','HD현대중공업'),('009540','HD한국조선해양'),
-    ('010140','삼성중공업'),('042660','한화오션'),('011170','롯데케미칼'),
-    ('011780','금호석유'),('096770','SK이노베이션'),('010950','S-Oil'),
-    ('004020','현대제철'),('010130','고려아연'),('011200','HMM'),
-    ('028670','팬오션'),('001120','LX인터내셔널'),('047050','포스코인터내셔널'),
-    ('267250','HD현대'),('012450','한화에어로스페이스'),('079550','LIG넥스원'),
-    ('005880','대한해운'),
-]
+
+# ============================================================
+# ★ v2.8 핵심: watchlist.json 재사용
+# ============================================================
+def load_watchlist():
+    """시즌1의 watchlist.json 재사용 - 3가지 구조 자동 인식"""
+    if not os.path.exists('watchlist.json'):
+        print('  ⚠ watchlist.json 없음')
+        return []
+    try:
+        with open('watchlist.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        stocks = []
+        
+        # 구조 1: [{"code": "005930", "name": "삼성전자"}, ...]
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    code = item.get('code') or item.get('ticker') or item.get('symbol')
+                    name = item.get('name') or item.get('종목명') or ''
+                    mcap = item.get('mcap', 0) or item.get('시가총액', 0) or 0
+                    if code:
+                        stocks.append({'code': str(code).zfill(6), 'name': str(name), 'mcap': int(mcap)})
+                elif isinstance(item, str):
+                    stocks.append({'code': item.zfill(6), 'name': '', 'mcap': 0})
+        
+        # 구조 2: {"005930": "삼성전자", "000660": "SK하이닉스", ...}
+        elif isinstance(data, dict):
+            # 키가 종목코드인지 체크 (6자리 숫자)
+            sample_keys = list(data.keys())[:5]
+            is_code_key = all(k.isdigit() and len(k) <= 6 for k in sample_keys)
+            
+            if is_code_key:
+                for code, val in data.items():
+                    if isinstance(val, str):
+                        stocks.append({'code': code.zfill(6), 'name': val, 'mcap': 0})
+                    elif isinstance(val, dict):
+                        name = val.get('name') or val.get('종목명') or ''
+                        mcap = val.get('mcap', 0) or val.get('시가총액', 0) or 0
+                        stocks.append({'code': code.zfill(6), 'name': str(name), 'mcap': int(mcap)})
+                    elif isinstance(val, (int, float)):
+                        # 값이 숫자면 시총일 수도
+                        stocks.append({'code': code.zfill(6), 'name': '', 'mcap': int(val)})
+            
+            # 구조 3: {"stocks": [...]} 또는 {"watchlist": [...]}
+            else:
+                for key in ['stocks', 'watchlist', 'items', 'data', 'list']:
+                    if key in data and isinstance(data[key], list):
+                        for item in data[key]:
+                            if isinstance(item, dict):
+                                code = item.get('code') or item.get('ticker') or item.get('symbol')
+                                name = item.get('name') or item.get('종목명') or ''
+                                mcap = item.get('mcap', 0) or item.get('시가총액', 0) or 0
+                                if code:
+                                    stocks.append({'code': str(code).zfill(6), 'name': str(name), 'mcap': int(mcap)})
+                        break
+        
+        print(f'  ✓ watchlist.json 로드: {len(stocks)}개 종목')
+        return stocks
+    except Exception as e:
+        print(f'  ✗ watchlist.json 로드 실패: {e}')
+        return []
 
 
-def get_top_stocks(n=500):
-    print(f'\n[1] KOSPI+KOSDAQ 시총 상위 {n}개 (기준일: {TODAY_STR})...')
-    for attempt in range(3):
+def get_stock_names_from_pykrx(stocks):
+    """이름 빠진 종목 보충 (선택적)"""
+    no_name = [s for s in stocks if not s['name']]
+    if not no_name:
+        return stocks
+    
+    print(f'  종목명 보충 시도: {len(no_name)}개')
+    success = 0
+    for s in no_name:
+        try:
+            name = stock.get_market_ticker_name(s['code'])
+            if name:
+                s['name'] = name
+                success += 1
+        except Exception:
+            s['name'] = f"종목{s['code']}"
+        time.sleep(0.05)
+    print(f'  ✓ 종목명 {success}개 보충')
+    return stocks
+
+
+def get_stocks_via_pykrx(n=500):
+    """pykrx로 시총 상위 N개 가져오기 (fallback)"""
+    print(f'\n[backup] pykrx로 시총 상위 {n}개 시도...')
+    for attempt in range(2):
         try:
             kospi = stock.get_market_cap_by_ticker(TODAY_STR, market='KOSPI')
             time.sleep(0.5)
             kosdaq = stock.get_market_cap_by_ticker(TODAY_STR, market='KOSDAQ')
             if kospi is None or len(kospi) == 0:
-                raise Exception('KOSPI 비어있음')
+                raise Exception('빈 데이터')
             all_stocks = pd.concat([kospi, kosdaq])
             all_stocks = all_stocks.sort_values('시가총액', ascending=False).head(n)
             result = []
@@ -114,12 +171,42 @@ def get_top_stocks(n=500):
                     result.append({'code': code, 'name': name, 'mcap': mcap})
                 except Exception:
                     continue
-            print(f'  ✓ {len(result)}개 확보')
+            print(f'  ✓ {len(result)}개')
             return result
         except Exception as e:
-            print(f'  ✗ 시도 {attempt+1}: {str(e)[:80]}')
+            print(f'  ✗ 시도 {attempt+1}: {str(e)[:60]}')
             time.sleep(2)
-    return [{'code': c, 'name': n, 'mcap': 0} for c, n in FALLBACK_STOCKS]
+    return []
+
+
+def get_stocks_list():
+    """★ v2.8: watchlist.json 우선, 실패 시 pykrx fallback"""
+    print('\n[1] 종목 리스트 로드')
+    # 1순위: watchlist.json
+    stocks = load_watchlist()
+    if stocks and len(stocks) >= 100:
+        stocks = get_stock_names_from_pykrx(stocks)
+        return stocks
+    # 2순위: pykrx
+    print('  → watchlist.json 부족, pykrx 시도')
+    stocks = get_stocks_via_pykrx(500)
+    if stocks:
+        return stocks
+    # 3순위: 최후 fallback
+    print('  → 최후 fallback 28개')
+    FB = [
+        ('005930','삼성전자'),('000660','SK하이닉스'),('373220','LG에너지솔루션'),
+        ('005380','현대차'),('000270','기아'),('005490','POSCO홀딩스'),
+        ('051910','LG화학'),('006400','삼성SDI'),('035420','NAVER'),
+        ('042700','한미반도체'),('329180','HD현대중공업'),('009540','HD한국조선해양'),
+        ('010140','삼성중공업'),('042660','한화오션'),('011170','롯데케미칼'),
+        ('011780','금호석유'),('096770','SK이노베이션'),('010950','S-Oil'),
+        ('004020','현대제철'),('010130','고려아연'),('011200','HMM'),
+        ('028670','팬오션'),('001120','LX인터내셔널'),('047050','포스코인터내셔널'),
+        ('267250','HD현대'),('012450','한화에어로스페이스'),('079550','LIG넥스원'),
+        ('005880','대한해운'),
+    ]
+    return [{'code': c, 'name': n, 'mcap': 0} for c, n in FB]
 
 
 def get_ohlc(code):
@@ -135,6 +222,9 @@ def get_ohlc(code):
     return None
 
 
+# ============================================================
+# 네이버 외인
+# ============================================================
 NAVER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Accept': 'application/json,text/plain,*/*',
@@ -225,7 +315,7 @@ def analyze_foreign_trend(history, code):
 
 
 # ============================================================
-# ★ v2.7 4차함수 c자리 (검증된 파라미터)
+# 4차함수 c자리
 # ============================================================
 def quartic(x, k, a, b, c):
     return k * (x - a) * (x - b) * (x - c) ** 2
@@ -258,7 +348,6 @@ def fit_quartic(prices, x_norm):
 
 
 def collect_c_candidates(df, win_sizes, step, recent_cutoff):
-    """v2.7: R²=0.25, c=0.50~0.95"""
     cands = []
     for win_size in win_sizes:
         if len(df) < win_size:
@@ -291,7 +380,6 @@ def collect_c_candidates(df, win_sizes, step, recent_cutoff):
 
 
 def find_aligned_c(daily, weekly, monthly):
-    """v2.7: 정렬 거리 약간 완화"""
     best = None
     best_score = -np.inf
     def dd(d1, d2):
@@ -345,23 +433,18 @@ def analyze_ma20(df):
 
 
 def determine_phase(avg_ratio_pct, ma20_stealth, foreign_trend):
-    """v2.7: 더 넓은 ratio 범위 대응"""
-    # 강력한 매집 (c자리 ±15%)
     if -15 <= avg_ratio_pct <= 15 and ma20_stealth and foreign_trend in ('accumulating', 'slight_up'):
         return 'stealth_accumulation'
     if -15 <= avg_ratio_pct <= 15 and foreign_trend in ('accumulating', 'slight_up'):
         return 'quiet_accumulation'
     if -15 <= avg_ratio_pct <= 15 and ma20_stealth and foreign_trend in ('gathering_data', 'no_data'):
         return 'likely_accumulation'
-    # 압축 자리 (c자리 ±15%)
     if -15 <= avg_ratio_pct <= 15:
         return 'compression'
-    # ★ v2.7 신규: c자리 아래 깊게 (분할매수 기회)
     if avg_ratio_pct < -15 and ma20_stealth:
-        return 'deep_accumulation'  # 분할매수 깊은 자리
+        return 'deep_accumulation'
     if avg_ratio_pct < -15:
-        return 'deep_value'  # 가치주 자리 (c자리 한참 아래)
-    # 막 깨고 나옴
+        return 'deep_value'
     if 15 < avg_ratio_pct <= 30:
         return 'early_breakout'
     return 'neutral'
@@ -391,7 +474,6 @@ def calc_score(stars, phase, ma20_stealth, foreign_trend, is_china, ratio_pct):
               'distributing': -15, 'slight_down': -5}.get(foreign_trend, 0)
     if ma20_stealth: score += 10
     if is_china: score += 5
-    # ratio_pct 보너스: -15%~+15% 진짜 매수 자리
     if -15 <= ratio_pct <= 15: score += 5
     return int(max(0, min(100, score)))
 
@@ -466,7 +548,6 @@ def analyze_stock(code, name, mcap, foreign_history):
     ma20 = analyze_ma20(df)
     foreign = analyze_foreign_trend(foreign_history, code)
     
-    # 외인 매도중 제외
     if foreign['trend'] == 'distributing':
         return None
     
@@ -474,7 +555,6 @@ def analyze_stock(code, name, mcap, foreign_history):
               if k in alignment and alignment[k]]
     avg_ratio = float(np.mean(ratios)) if ratios else 0.0
     
-    # ★ v2.7: -50% ~ +30%
     if avg_ratio < RATIO_MIN or avg_ratio > RATIO_MAX:
         return None
     
@@ -545,13 +625,14 @@ def upload_to_gabia(local_path, remote_name):
 
 def main():
     t0 = time.time()
-    print(f'[SIGVIEW 잭팟 시즌2 v2.7 - 검증된 최적 파라미터]')
-    print(f'  R² ≥ {R2_MIN}, c 범위 {C_MIN}~{C_MAX}, ratio {RATIO_MIN}%~{RATIO_MAX}%')
+    print(f'[SIGVIEW 잭팟 시즌2 v2.8 - watchlist.json 재사용]')
+    print(f'  R² ≥ {R2_MIN}, c {C_MIN}~{C_MAX}, ratio {RATIO_MIN}%~{RATIO_MAX}%')
 
-    stocks_list = get_top_stocks(MAX_STOCKS)
+    stocks_list = get_stocks_list()
     if not stocks_list:
         print('종목 리스트 실패')
         return
+    print(f'\n  → 총 {len(stocks_list)}개 종목 분석 시작')
 
     foreign_history = load_foreign_history()
     print(f'\n[2] 외인 히스토리: {len(foreign_history)}개')
@@ -580,7 +661,8 @@ def main():
             if r:
                 results.append(r)
                 ch = ' 🇨🇳' if r['is_china_play'] else ''
-                print(f'  [{i}] {s["name"]}{ch} ★{r["stars"]} {r["accumulation_score"]}점 {r["verdict"]} ({r["avg_ratio_pct"]:+.1f}%)')
+                if r['stars'] >= 4:  # ★★★★+만 출력 (로그 절약)
+                    print(f'  [{i}] {s["name"]}{ch} ★{r["stars"]} {r["accumulation_score"]}점 {r["verdict"]} ({r["avg_ratio_pct"]:+.1f}%)')
             if i % 100 == 0:
                 elapsed = time.time() - t0
                 print(f'  ... {i}/{len(stocks_list)} (좋은 종목 {len(results)}개, {elapsed:.0f}초)')
@@ -592,7 +674,7 @@ def main():
         r['rank'] = i
 
     output = {
-        'version': '2.7', 'season': 2, 'algo_version': '2.7',
+        'version': '2.8', 'season': 2, 'algo_version': '2.8',
         'generated_at': TODAY.isoformat(),
         'analysis_date': TODAY_STR,
         'n_scanned': len(stocks_list),
@@ -608,9 +690,8 @@ def main():
             'new_records_today': total_new,
         },
         'algorithm': {
-            'name': 'SIGVIEW 시즌2 v2.7 (검증된 파라미터)',
-            'description': '9개 SSS+골든 종목으로 백테스팅 7/9 검증 완료',
-            'verified_stocks': '롯데케미칼/금호석유/현대제철/S-Oil/대한해운/LX인터/팬오션',
+            'name': 'SIGVIEW 시즌2 v2.8 (watchlist.json 재사용)',
+            'description': '시즌1과 동일 종목 풀 + v2.7 검증된 파라미터',
         },
         'summary': {
             'five_stars': sum(1 for r in results if r['stars'] == 5),
@@ -626,14 +707,14 @@ def main():
             'china_plays': sum(1 for r in results if r['is_china_play']),
         },
         'stocks': results,
-        'disclaimer': 'v2.7 검증된 최적 파라미터. 9개 SSS+골든 종목으로 7/9 검증 통과. 투자 권유 X.',
+        'disclaimer': 'v2.8 watchlist.json 재사용 (시즌1 동기화). 투자 권유 X.',
     }
     output = to_native(output)
     with open('jackpot-v2.json', 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
     elapsed = time.time() - t0
-    print(f'\n저장: {len(results)}개 좋은 종목')
+    print(f'\n저장: {len(results)}개 좋은 종목 / {len(stocks_list)}개 분석')
     print(f'시간: {elapsed:.0f}초 ({elapsed/60:.1f}분)')
 
     print('\n[5] FTP 업로드')
