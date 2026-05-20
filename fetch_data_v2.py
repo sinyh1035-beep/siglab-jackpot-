@@ -1,15 +1,12 @@
 """
-fetch_data_v2.py — SIGVIEW 잭팟 시즌2 v2.3
+fetch_data_v2.py — SIGVIEW 잭팟 시즌2 v2.5
 ==========================================
-변경사항 (v2.2 → v2.3):
-✅ 최근 거래일 자동 찾기 (장 마감 전/주말/공휴일 대응)
-✅ pykrx 에러 핸들링 강화 (3회 재시도)
-✅ KRX_ID/PW 경고 무시 (pykrx 정상 작동)
-✅ 시총 데이터 못 받으면 fallback 종목 사용
-
-★ 시즌2 핵심 = 4차함수 c자리 자동 검출
-생성: jackpot-v2.json
-업로드: Gabia FTP
+변경사항 (v2.3 → v2.5):
+✅ 모든 종목 표시 (시즌1처럼)
+✅ c자리 검출은 보너스 점수
+✅ c자리 없어도 외인/20일선/중국 점수로 분류
+✅ 필터 완화 (R² 0.55→0.35, c 범위 0.55~0.95)
+✅ Phase 분류 기준 완화
 """
 import os, json, time, warnings
 from datetime import datetime, timezone, timedelta
@@ -23,9 +20,6 @@ from pykrx import stock
 
 warnings.filterwarnings('ignore')
 
-# ============================================================
-# 환경변수
-# ============================================================
 FTP_HOST = os.environ.get('FTP_HOST', '')
 FTP_USER = os.environ.get('FTP_USER', '')
 FTP_PASS = os.environ.get('FTP_PASS', '')
@@ -34,29 +28,26 @@ FTP_TARGET_DIR = os.environ.get('FTP_TARGET_DIR', '/public_html/wp-content/data'
 KST = timezone(timedelta(hours=9))
 TODAY = datetime.now(KST)
 
-# ★ 최근 거래일 자동 찾기 (장 마감 전이면 어제, 주말이면 금요일)
+
 def get_recent_trading_day():
-    """가장 최근 영업일 찾기 (최대 7일 거슬러 올라감)"""
     for days_back in range(0, 8):
         check_date = TODAY - timedelta(days=days_back)
         date_str = check_date.strftime('%Y%m%d')
         try:
-            # 코스피 지수 데이터 시도 - 거래일이면 데이터 있음
             test = stock.get_index_ohlcv(date_str, date_str, '1001')
             if test is not None and len(test) > 0:
                 return date_str
         except Exception:
             continue
-    # fallback: 어제
     return (TODAY - timedelta(days=1)).strftime('%Y%m%d')
 
+
 TODAY_STR = get_recent_trading_day()
-print(f'[INIT] 분석 기준일: {TODAY_STR} (KST {TODAY.strftime("%Y-%m-%d %H:%M")})')
+print(f'[INIT] 분석 기준일: {TODAY_STR}')
 
 MAX_STOCKS = 500
 START_DATE = (TODAY - timedelta(days=5*365)).strftime('%Y%m%d')
 
-# 중국 직접 수혜
 CHINA_DIRECT = {
     '005490','004020','010130','103140','460860','001230','001430',
     '003030','016380','005010','011170','009830','011780','096770',
@@ -64,7 +55,7 @@ CHINA_DIRECT = {
     '011200','028670','267250','003490','001120','001250','047050',
 }
 
-# Fallback 종목 (pykrx 실패 시) - 시총 상위 cyclical 100개
+# Fallback 종목
 FALLBACK_STOCKS = [
     ('005930','삼성전자'),('000660','SK하이닉스'),('373220','LG에너지솔루션'),
     ('005380','현대차'),('000270','기아'),('005490','POSCO홀딩스'),
@@ -106,19 +97,16 @@ FALLBACK_STOCKS = [
     ('240810','원익IPS'),('357780','솔브레인'),('005880','대한해운'),
 ]
 
-# ============================================================
-# 1. 시총 상위 N개 (재시도 + fallback)
-# ============================================================
+
 def get_top_stocks(n=500):
-    print(f'\n[1] KOSPI+KOSDAQ 시총 상위 {n}개 가져오는 중 (기준일: {TODAY_STR})...')
-    # 3번 재시도
+    print(f'\n[1] KOSPI+KOSDAQ 시총 상위 {n}개 (기준일: {TODAY_STR})...')
     for attempt in range(3):
         try:
             kospi = stock.get_market_cap_by_ticker(TODAY_STR, market='KOSPI')
             time.sleep(0.5)
             kosdaq = stock.get_market_cap_by_ticker(TODAY_STR, market='KOSDAQ')
             if kospi is None or len(kospi) == 0:
-                raise Exception('KOSPI 시총 데이터 비어있음')
+                raise Exception('KOSPI 비어있음')
             all_stocks = pd.concat([kospi, kosdaq])
             all_stocks = all_stocks.sort_values('시가총액', ascending=False).head(n)
             result = []
@@ -129,25 +117,17 @@ def get_top_stocks(n=500):
                     result.append({'code': code, 'name': name, 'mcap': mcap})
                 except Exception:
                     continue
-            print(f'  ✓ {len(result)}개 종목 확보 (시도 {attempt+1})')
+            print(f'  ✓ {len(result)}개 확보')
             return result
         except Exception as e:
-            print(f'  ✗ 시도 {attempt+1} 실패: {str(e)[:100]}')
+            print(f'  ✗ 시도 {attempt+1}: {str(e)[:80]}')
             time.sleep(2)
-
-    # Fallback: 하드코딩 종목 사용
-    print(f'  ⚠ pykrx 실패 → fallback {len(FALLBACK_STOCKS)}개 종목 사용')
-    result = []
-    for code, name in FALLBACK_STOCKS:
-        result.append({'code': code, 'name': name, 'mcap': 0})
-    return result
+    print(f'  ⚠ Fallback {len(FALLBACK_STOCKS)}개')
+    return [{'code': c, 'name': n, 'mcap': 0} for c, n in FALLBACK_STOCKS]
 
 
-# ============================================================
-# 2. OHLC (5년치, 재시도)
-# ============================================================
 def get_ohlc(code):
-    for attempt in range(2):
+    for _ in range(2):
         try:
             df = stock.get_market_ohlcv(START_DATE, TODAY_STR, code)
             if df is None or len(df) < 250:
@@ -156,12 +136,11 @@ def get_ohlc(code):
             return df
         except Exception:
             time.sleep(0.3)
-            continue
     return None
 
 
 # ============================================================
-# 3. 네이버 외인
+# 네이버 외인
 # ============================================================
 NAVER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -195,9 +174,6 @@ def fetch_naver_foreign(code):
         return []
 
 
-# ============================================================
-# 4. 외인 히스토리
-# ============================================================
 def load_foreign_history(path='foreign-history-v2.json'):
     if not os.path.exists(path):
         return {}
@@ -259,7 +235,7 @@ def analyze_foreign_trend(history, code):
 
 
 # ============================================================
-# 5. ★ 4차함수 c자리 검출
+# ★ 4차함수 c자리 (필터 완화)
 # ============================================================
 def quartic(x, k, a, b, c):
     return k * (x - a) * (x - b) * (x - c) ** 2
@@ -270,7 +246,8 @@ def fit_quartic(prices, x_norm):
     h = prices - g_base
     best, best_r2 = None, -np.inf
     for a0, b0, c0 in [(0.10, 0.40, 0.80), (0.20, 0.50, 0.85),
-                       (0.05, 0.35, 0.75), (0.15, 0.45, 0.90)]:
+                       (0.05, 0.35, 0.75), (0.15, 0.45, 0.90),
+                       (0.10, 0.30, 0.65)]:  # ★ 더 많은 시도
         try:
             scale = max(h.max(), 1)
             k0 = scale / max(abs((1 - a0) * (1 - b0) * (1 - c0) ** 2), 1e-6)
@@ -290,7 +267,7 @@ def fit_quartic(prices, x_norm):
     return best, best_r2
 
 
-def collect_c_candidates(df, win_sizes, step, recent_cutoff, r2_min=0.55):
+def collect_c_candidates(df, win_sizes, step, recent_cutoff, r2_min=0.35):  # ★ 0.55 → 0.35
     cands = []
     for win_size in win_sizes:
         if len(df) < win_size:
@@ -303,7 +280,7 @@ def collect_c_candidates(df, win_sizes, step, recent_cutoff, r2_min=0.55):
             if fit_result is None or r2 < r2_min:
                 continue
             k_f, a_f, b_f, c_f, g_base = fit_result
-            if not (0.65 <= c_f <= 0.95):
+            if not (0.55 <= c_f <= 0.95):  # ★ 0.65 → 0.55
                 continue
             c_idx = start_i + int(c_f * (win_size - 1))
             c_date = df.index[c_idx]
@@ -330,16 +307,15 @@ def find_aligned_c(daily, weekly, monthly):
         for w in weekly:
             for m in monthly:
                 dw, wm, dm = dd(d['c_date'], w['c_date']), dd(w['c_date'], m['c_date']), dd(d['c_date'], m['c_date'])
-                if dw <= 6 and wm <= 12 and dm <= 12:
+                if dw <= 8 and wm <= 14 and dm <= 14:  # ★ 6/12 → 8/14
                     score = (d['r2'] + w['r2'] + m['r2']) - (dw + wm + dm) * 0.02
                     if score > best_score:
                         best_score = score
-                        best = {'stars': 5, 'type': '일+주+월',
-                                'daily': d, 'weekly': w, 'monthly': m}
+                        best = {'stars': 5, 'type': '일+주+월', 'daily': d, 'weekly': w, 'monthly': m}
     if best: return best
-    pairs = [('일+주', daily, weekly, 6, 'daily', 'weekly'),
-             ('주+월', weekly, monthly, 12, 'weekly', 'monthly'),
-             ('일+월', daily, monthly, 12, 'daily', 'monthly')]
+    pairs = [('일+주', daily, weekly, 8, 'daily', 'weekly'),
+             ('주+월', weekly, monthly, 14, 'weekly', 'monthly'),
+             ('일+월', daily, monthly, 14, 'daily', 'monthly')]
     for tn, fa, fb, max_m, ka, kb in pairs:
         for a in fa:
             for b in fb:
@@ -360,17 +336,14 @@ def find_aligned_c(daily, weekly, monthly):
     return None
 
 
-# ============================================================
-# 6. 20일선 + Phase 분류
-# ============================================================
 def analyze_ma20(df):
     if df is None or len(df) < 30:
-        return {'count': 0, 'is_stealth': False}
+        return {'count': 0, 'is_stealth': False, 'price_range_pct': 0}
     recent = df.tail(250).copy()
     recent['ma20'] = recent['종가'].rolling(20).mean()
     recent = recent.dropna()
     if len(recent) < 30:
-        return {'count': 0, 'is_stealth': False}
+        return {'count': 0, 'is_stealth': False, 'price_range_pct': 0}
     above = (recent['종가'] > recent['ma20']).astype(int)
     crossings = int((above.diff().abs() == 1).sum())
     pr = float((recent['종가'].max() - recent['종가'].min()) / recent['종가'].mean() * 100)
@@ -378,52 +351,83 @@ def analyze_ma20(df):
             'price_range_pct': round(pr, 1)}
 
 
-def determine_phase(ratio_pct, ma20_stealth, foreign_trend):
-    if -15 <= ratio_pct <= 15 and ma20_stealth and foreign_trend in ('accumulating', 'slight_up'):
-        return 'stealth_accumulation'
-    if -15 <= ratio_pct <= 15 and foreign_trend in ('accumulating', 'slight_up'):
-        return 'quiet_accumulation'
-    if -15 <= ratio_pct <= 15 and ma20_stealth and foreign_trend in ('gathering_data', 'no_data'):
-        return 'likely_accumulation'
-    if 10 < ratio_pct <= 30 and foreign_trend in ('accumulating', 'slight_up', 'flat', 'gathering_data'):
-        return 'early_breakout'
-    if 30 < ratio_pct <= 60: return 'in_progress'
-    if ratio_pct > 60: return 'already_run'
-    if foreign_trend == 'distributing': return 'risky'
-    if ratio_pct < -15: return 'failed'
-    return 'neutral'
+# ============================================================
+# ★ Phase 분류 (c자리 없어도 분류)
+# ============================================================
+def determine_phase(has_c, avg_ratio_pct, ma20_stealth, foreign_trend):
+    """c자리 있으면 우선 적용, 없으면 외인+20일선만으로 분류"""
+    if has_c:
+        # c자리 검출됨 - 기존 로직
+        if -15 <= avg_ratio_pct <= 15 and ma20_stealth and foreign_trend in ('accumulating', 'slight_up'):
+            return 'stealth_accumulation'
+        if -15 <= avg_ratio_pct <= 15 and foreign_trend in ('accumulating', 'slight_up'):
+            return 'quiet_accumulation'
+        if -15 <= avg_ratio_pct <= 15 and ma20_stealth and foreign_trend in ('gathering_data', 'no_data'):
+            return 'likely_accumulation'
+        if 10 < avg_ratio_pct <= 30 and foreign_trend in ('accumulating', 'slight_up', 'flat', 'gathering_data'):
+            return 'early_breakout'
+        if 30 < avg_ratio_pct <= 60: return 'in_progress'
+        if avg_ratio_pct > 60: return 'already_run'
+        if foreign_trend == 'distributing': return 'risky'
+        if avg_ratio_pct < -15: return 'failed'
+        return 'neutral'
+    else:
+        # ★ c자리 없음 - 외인+20일선만으로 분류
+        if ma20_stealth and foreign_trend in ('accumulating', 'slight_up'):
+            return 'no_c_stealth'  # c자리 없지만 매집 패턴
+        if foreign_trend == 'accumulating':
+            return 'no_c_accumulating'  # 외인 매집중
+        if ma20_stealth:
+            return 'no_c_quiet'  # 횡보 + 거래량 패턴
+        if foreign_trend == 'distributing':
+            return 'risky'
+        return 'neutral'
 
 
 VERDICTS = {
-    'stealth_accumulation': '🎯 외인 매집 확정',
-    'quiet_accumulation': '🐢 외인 조용한 매집',
-    'likely_accumulation': '🔍 매집 추정',
-    'early_breakout': '🌱 막 깨고 나옴',
-    'in_progress': '⚪ 진행 중',
-    'already_run': '🔥 이미 폭발',
+    'stealth_accumulation': '🎯 외인 매집 확정 (c자리)',
+    'quiet_accumulation': '🐢 외인 조용한 매집 (c자리)',
+    'likely_accumulation': '🔍 매집 추정 (c자리)',
+    'early_breakout': '🌱 막 깨고 나옴 (c자리)',
+    'in_progress': '⚪ 진행 중 (c자리)',
+    'already_run': '🔥 이미 폭발 (c자리)',
     'risky': '⚠️ 외인 매도중',
     'failed': '❌ 약함',
+    'no_c_stealth': '🔵 매집 패턴 (c자리 X)',
+    'no_c_accumulating': '🟢 외인 매집중 (c자리 X)',
+    'no_c_quiet': '⚪ 횡보+거래량 (c자리 X)',
+    'neutral': '— 평이',
 }
 
 
-def calc_score(stars, phase, ma20_stealth, foreign_trend, is_china):
-    score = stars * 10
-    score += {
-        'stealth_accumulation': 35, 'quiet_accumulation': 25,
-        'likely_accumulation': 15, 'early_breakout': 15,
-        'in_progress': 5, 'already_run': -5,
-        'risky': -15, 'failed': -20, 'neutral': 0,
-    }.get(phase, 0)
-    score += {'accumulating': 20, 'slight_up': 10,
-              'distributing': -15, 'slight_down': -5}.get(foreign_trend, 0)
+def calc_score(stars, phase, ma20_stealth, foreign_trend, is_china, has_c):
+    """c자리 있으면 큰 보너스, 없으면 기본 점수"""
+    score = 0
+    # c자리 점수 (보너스)
+    if has_c:
+        score += stars * 12  # ★3=36, ★4=48, ★5=60
+        score += {
+            'stealth_accumulation': 30, 'quiet_accumulation': 20,
+            'likely_accumulation': 12, 'early_breakout': 12,
+            'in_progress': 5, 'already_run': -5,
+        }.get(phase, 0)
+    else:
+        # c자리 없어도 기본 점수
+        score += {
+            'no_c_stealth': 25,  # 매집 패턴 강함
+            'no_c_accumulating': 20,
+            'no_c_quiet': 15,
+            'neutral': 5,
+            'risky': -10,
+        }.get(phase, 5)
+    # 공통 점수
+    score += {'accumulating': 18, 'slight_up': 8,
+              'distributing': -12, 'slight_down': -4}.get(foreign_trend, 0)
     if ma20_stealth: score += 10
     if is_china: score += 5
     return int(max(0, min(100, score)))
 
 
-# ============================================================
-# 7. 리샘플 + 차트
-# ============================================================
 def resample_w(df):
     return df.resample('W-FRI').agg({
         '시가': 'first', '고가': 'max', '저가': 'min',
@@ -471,7 +475,7 @@ def to_native(obj):
 
 
 # ============================================================
-# 8. 종목 분석
+# ★ 종목 분석 (c자리 없어도 결과 반환)
 # ============================================================
 def analyze_stock(code, name, mcap, foreign_history):
     df = get_ohlc(code)
@@ -481,29 +485,42 @@ def analyze_stock(code, name, mcap, foreign_history):
     df_m = resample_m(df)
     if df_w is None or df_m is None or len(df_w) < 60 or len(df_m) < 24:
         return None
+    
+    # 4차함수 c자리 검출 시도
     cutoff_d = pd.Timestamp((TODAY - timedelta(days=3*365)).date())
     cutoff_w = pd.Timestamp((TODAY - timedelta(days=4*365)).date())
     cutoff_m = pd.Timestamp((TODAY - timedelta(days=5*365)).date())
     daily_c = collect_c_candidates(df, [400, 800], 50, cutoff_d)
     weekly_c = collect_c_candidates(df_w, [100, 180], 10, cutoff_w)
     monthly_c = collect_c_candidates(df_m, [36, 60], 6, cutoff_m)
-    if not (daily_c or weekly_c or monthly_c):
-        return None
     alignment = find_aligned_c(daily_c, weekly_c, monthly_c)
-    if alignment is None:
-        return None
+    
+    # ★ c자리 없어도 계속 진행
+    has_c = alignment is not None
+    stars = alignment['stars'] if has_c else 0
+    
+    # 20일선
     ma20 = analyze_ma20(df)
+    # 외인
     foreign = analyze_foreign_trend(foreign_history, code)
-    ratios = [alignment[k]['ratio_pct'] for k in ['daily','weekly','monthly']
-              if k in alignment and alignment[k]]
-    avg_ratio = float(np.mean(ratios)) if ratios else 0.0
-    phase = determine_phase(avg_ratio, ma20['is_stealth'], foreign['trend'])
-    verdict = VERDICTS.get(phase, '평이')
+    
+    # ratio_pct 평균
+    avg_ratio = 0.0
+    if has_c:
+        ratios = [alignment[k]['ratio_pct'] for k in ['daily','weekly','monthly']
+                  if k in alignment and alignment[k]]
+        avg_ratio = float(np.mean(ratios)) if ratios else 0.0
+    
+    # Phase 분류
+    phase = determine_phase(has_c, avg_ratio, ma20['is_stealth'], foreign['trend'])
+    verdict = VERDICTS.get(phase, '—')
     is_china = code in CHINA_DIRECT
-    score = calc_score(alignment['stars'], phase, ma20['is_stealth'], foreign['trend'], is_china)
+    score = calc_score(stars, phase, ma20['is_stealth'], foreign['trend'], is_china, has_c)
+    
     return {
         'code': code, 'name': name, 'mcap': mcap,
-        'stars': int(alignment['stars']),
+        'stars': int(stars),
+        'has_c': bool(has_c),
         'phase': phase, 'verdict': verdict,
         'accumulation_score': score,
         'is_china_play': bool(is_china),
@@ -529,12 +546,8 @@ def analyze_stock(code, name, mcap, foreign_history):
     }
 
 
-# ============================================================
-# 9. FTP 업로드
-# ============================================================
 def upload_to_gabia(local_path, remote_name):
     if not all([FTP_HOST, FTP_USER, FTP_PASS]):
-        print('  FTP 환경변수 누락')
         return False
     try:
         ftp = FTP(FTP_HOST, timeout=30)
@@ -548,29 +561,26 @@ def upload_to_gabia(local_path, remote_name):
         with open(local_path, 'rb') as f:
             ftp.storbinary(f'STOR {remote_name}', f)
         ftp.quit()
-        print(f'  ✓ FTP 업로드 성공: {FTP_TARGET_DIR}/{remote_name}')
+        print(f'  ✓ FTP: {FTP_TARGET_DIR}/{remote_name}')
         return True
     except Exception as e:
         print(f'  ✗ FTP 실패: {e}')
         return False
 
 
-# ============================================================
-# 10. 메인
-# ============================================================
 def main():
     t0 = time.time()
-    print(f'[SIGVIEW 잭팟 시즌2 v2.3]')
+    print(f'[SIGVIEW 잭팟 시즌2 v2.5]')
 
     stocks_list = get_top_stocks(MAX_STOCKS)
     if not stocks_list:
-        print('종목 리스트 실패 - 종료')
+        print('종목 리스트 실패')
         return
 
     foreign_history = load_foreign_history()
-    print(f'\n[2] 외인 히스토리: {len(foreign_history)}개 종목 추적중')
+    print(f'\n[2] 외인 히스토리: {len(foreign_history)}개')
 
-    print(f'\n[3] 외인 보유율 수집 (네이버, {len(stocks_list)}개)')
+    print(f'\n[3] 외인 수집 (네이버, {len(stocks_list)}개)')
     fetch_success = 0
     total_new = 0
     for i, s in enumerate(stocks_list, 1):
@@ -579,31 +589,33 @@ def main():
             added = update_foreign_history(foreign_history, s['code'], series)
             total_new += added
             fetch_success += 1
-        if i % 50 == 0:
-            print(f'  진행 {i}/{len(stocks_list)} (성공 {fetch_success})')
+        if i % 100 == 0:
+            print(f'  {i}/{len(stocks_list)} (성공 {fetch_success})')
         time.sleep(0.05)
     save_foreign_history(foreign_history)
-    print(f'  ✓ 성공 {fetch_success}/{len(stocks_list)}, 신규 {total_new}건')
+    print(f'  ✓ {fetch_success}/{len(stocks_list)}, 신규 {total_new}건')
 
-    print(f'\n[4] OHLC + 4차함수 c자리 분석 ({len(stocks_list)}개)')
+    print(f'\n[4] OHLC + 4차함수 ({len(stocks_list)}개)')
     print('-' * 60)
     results = []
     fail_count = 0
+    c_count = 0
     for i, s in enumerate(stocks_list, 1):
         try:
             r = analyze_stock(s['code'], s['name'], s['mcap'], foreign_history)
             if r:
                 results.append(r)
-                if r['accumulation_score'] >= 50 or r['stars'] >= 5:
+                if r['has_c']:
+                    c_count += 1
+                if r['has_c'] and r['stars'] >= 4:
                     ch = ' 🇨🇳' if r['is_china_play'] else ''
-                    print(f'  [{i}/{len(stocks_list)}] {s["name"]}{ch} ★{r["stars"]} '
-                          f'{r["accumulation_score"]}점 {r["verdict"]}')
+                    print(f'  [{i}] {s["name"]}{ch} ★{r["stars"]} {r["accumulation_score"]}점')
             else:
                 fail_count += 1
-            if i % 50 == 0:
+            if i % 100 == 0:
                 elapsed = time.time() - t0
-                print(f'  ... 진행 {i}/{len(stocks_list)} (매칭 {len(results)}, 실패 {fail_count}, {elapsed:.0f}초)')
-        except Exception as e:
+                print(f'  ... {i}/{len(stocks_list)} (매칭 {len(results)}, c자리 {c_count}, 실패 {fail_count}, {elapsed:.0f}초)')
+        except Exception:
             fail_count += 1
 
     results.sort(key=lambda x: -x['accumulation_score'])
@@ -611,11 +623,12 @@ def main():
         r['rank'] = i
 
     output = {
-        'version': '2.3', 'season': 2, 'algo_version': '2.3',
+        'version': '2.5', 'season': 2, 'algo_version': '2.5',
         'generated_at': TODAY.isoformat(),
         'analysis_date': TODAY_STR,
         'n_scanned': len(stocks_list),
         'n_matched': len(results),
+        'n_with_c': c_count,
         'foreign_data': {
             'source': 'NAVER 5d cumulative',
             'total_codes_tracked': len(foreign_history),
@@ -623,36 +636,39 @@ def main():
             'new_records_today': total_new,
         },
         'algorithm': {
-            'name': 'SIGVIEW 시즌2 v2.3 (pykrx + 거래일 자동)',
-            'description': '4차함수 c자리 + 외인 매집 + 20일선',
+            'name': 'SIGVIEW 시즌2 v2.5',
+            'description': '모든 종목 분석 + 4차함수 c자리 보너스 + 외인 매집',
         },
         'summary': {
             'five_stars': sum(1 for r in results if r['stars'] == 5),
             'four_stars': sum(1 for r in results if r['stars'] == 4),
             'three_stars': sum(1 for r in results if r['stars'] == 3),
+            'has_c': c_count,
             'stealth_accumulation': sum(1 for r in results if r['phase'] == 'stealth_accumulation'),
             'quiet_accumulation': sum(1 for r in results if r['phase'] == 'quiet_accumulation'),
             'likely_accumulation': sum(1 for r in results if r['phase'] == 'likely_accumulation'),
             'early_breakout': sum(1 for r in results if r['phase'] == 'early_breakout'),
+            'no_c_stealth': sum(1 for r in results if r['phase'] == 'no_c_stealth'),
+            'no_c_accumulating': sum(1 for r in results if r['phase'] == 'no_c_accumulating'),
             'china_plays': sum(1 for r in results if r['is_china_play']),
         },
         'stocks': results,
-        'disclaimer': '4차함수 c자리 패턴 + 외인 보유율. 투자 권유 X.',
+        'disclaimer': '4차함수 c자리 + 외인 + 20일선. 투자 권유 X.',
     }
     output = to_native(output)
     with open('jackpot-v2.json', 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
     elapsed = time.time() - t0
-    print(f'\n저장: jackpot-v2.json ({len(results)}/{len(stocks_list)}개)')
-    print(f'총 소요 시간: {elapsed:.0f}초 ({elapsed/60:.1f}분)')
+    print(f'\n저장: {len(results)}/{len(stocks_list)}개 (c자리 {c_count}개)')
+    print(f'시간: {elapsed:.0f}초 ({elapsed/60:.1f}분)')
 
-    print('\n[5] Gabia FTP 업로드')
+    print('\n[5] FTP 업로드')
     upload_to_gabia('jackpot-v2.json', 'jackpot-v2.json')
     if os.path.exists('foreign-history-v2.json'):
         upload_to_gabia('foreign-history-v2.json', 'foreign-history-v2.json')
 
-    print(f'\n✅ 완료 - siglab.kr/tools-jackpot-v2/ 에서 확인')
+    print(f'\n✅ 완료')
 
 
 if __name__ == '__main__':
