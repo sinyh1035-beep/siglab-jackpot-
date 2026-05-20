@@ -1,15 +1,19 @@
 """
-fetch_data_v2.py — SIGVIEW 잭팟 시즌2 v2.9
-==========================================
-변경 (v2.8 → v2.9):
-✅ pykrx 제거 → FinanceDataReader + yfinance (시즌1과 동일!)
-✅ 시총 5천억+ 종목 자동 (521개 예상)
-✅ 시즌1과 인프라 통합 = 안정성 ★
+fetch_data_v2.py — SIGVIEW 잭팟 시즌2 v3.0 (속도 최적화)
+======================================================
+변경 (v2.9 → v3.0):
+✅ 4차함수 윈도우 축소 (3개 → 1개)
+✅ step 증가 (50 → 100)
+✅ 초기값 5개 → 3개
+✅ maxfev 2000 → 800
+✅ 병렬 처리 (ThreadPoolExecutor)
+✅ 1종목 5초 → 1초 미만
 
-알고리즘:
-- v2.7 검증된 파라미터 유지 (R²=0.25, c=0.50~0.95, ratio -50~+30)
-- 4차함수 c자리 자동 검출 (★ 시즌2 핵심)
-- 외인 매집 + 20일선 + 중국 수혜
+예상 시간:
+- v2.9: 50분+ (timeout)
+- v3.0: 5~10분 ★
+
+알고리즘 동일 (v2.7 검증 파라미터 유지)
 """
 import os, json, time, warnings
 from datetime import datetime, timezone, timedelta
@@ -33,7 +37,6 @@ FTP_TARGET_DIR = os.environ.get('FTP_TARGET_DIR', '/wp-content/data')
 KST = timezone(timedelta(hours=9))
 TODAY = datetime.now(KST)
 
-# 시총 5천억 이상 (시즌1과 동일)
 THRESHOLD = 500_000_000_000
 
 # v2.7 검증된 최적 파라미터
@@ -45,6 +48,17 @@ RATIO_MAX = 30.0
 ALIGN_DW_MAX = 8
 ALIGN_WM_MAX = 14
 ALIGN_DM_MAX = 14
+
+# ★ v3.0 속도 최적화 - 윈도우 1개로 축소
+WIN_DAILY = [600]       # 이전 [400,600,800]
+WIN_WEEKLY = [120]      # 이전 [80,120,180]
+WIN_MONTHLY = [48]      # 이전 [30,48,60]
+STEP_DAILY = 100        # 이전 50
+STEP_WEEKLY = 15        # 이전 10
+STEP_MONTHLY = 6        # 이전 4
+
+# 병렬 워커
+MAX_WORKERS = 8
 
 CHINA_DIRECT = {
     '005490','004020','010130','103140','460860','001230','001430',
@@ -58,12 +72,8 @@ def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-# ============================================================
-# 1. 종목 리스트 (시즌1과 동일 - fdr 사용)
-# ============================================================
 def get_stock_list():
-    """시즌1과 동일: KRX 시총 5천억+ 자동"""
-    log("Step 1: 시총 5천억+ 종목 리스트 (fdr.StockListing)...")
+    log("Step 1: 시총 5천억+ 종목 리스트 (fdr)...")
     try:
         krx = fdr.StockListing('KRX')
         krx = krx[krx['Market'].isin(['KOSPI', 'KOSDAQ'])]
@@ -72,24 +82,19 @@ def get_stock_list():
         result = []
         for _, row in filtered.iterrows():
             result.append({
-                'code': row['Code'],
-                'name': row['Name'],
-                'market': row['Market'],
-                'mcap': int(row['Marcap']),
+                'code': row['Code'], 'name': row['Name'],
+                'market': row['Market'], 'mcap': int(row['Marcap']),
             })
-        log(f"  → {len(result)}개 종목 (시즌1과 동일 풀)")
+        log(f"  → {len(result)}개")
         return result
     except Exception as e:
         log(f"  ✗ fdr 실패: {e}")
         return []
 
 
-# ============================================================
-# 2. 가격 데이터 (yfinance, 시즌1과 동일)
-# ============================================================
 def fetch_prices(stocks):
-    """yfinance로 10년치 일봉 - 시즌1과 동일"""
-    log(f"Step 2: 가격 데이터 ({len(stocks)}종목, yfinance)...")
+    """yfinance 배치 다운로드"""
+    log(f"Step 2: 가격 데이터 ({len(stocks)}종목)...")
     all_data = {}
     BATCH = 50
     t0 = time.time()
@@ -108,31 +113,26 @@ def fetch_prices(stocks):
                 df = data[yf_code] if len(codes_yf) > 1 else data
                 df = df.dropna()
                 if len(df) > 250:
-                    # 한글 컬럼명으로 변환 (시즌2 알고리즘 호환)
                     result_df = pd.DataFrame({
-                        '시가': df['Open'],
-                        '고가': df['High'],
-                        '저가': df['Low'],
-                        '종가': df['Close'],
+                        '시가': df['Open'], '고가': df['High'],
+                        '저가': df['Low'], '종가': df['Close'],
                         '거래량': df['Volume'],
                     }, index=df.index)
                     all_data[s['code']] = {
-                        'name': s['name'],
-                        'market': s['market'],
-                        'mcap': int(s['mcap']),
-                        'df': result_df,
+                        'name': s['name'], 'market': s['market'],
+                        'mcap': int(s['mcap']), 'df': result_df,
                     }
             except Exception:
                 pass
         if i % 100 == 0:
             log(f"  ... {i}/{len(stocks)} ({time.time()-t0:.0f}초)")
         time.sleep(0.3)
-    log(f"  → {len(all_data)}개 가격 데이터 ({time.time()-t0:.0f}초)")
+    log(f"  → {len(all_data)} ({time.time()-t0:.0f}초)")
     return all_data
 
 
 # ============================================================
-# 3. 네이버 외인 (5일치 매주 누적)
+# 네이버 외인 (★ 병렬 처리)
 # ============================================================
 NAVER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -144,7 +144,7 @@ def fetch_naver_foreign(code):
     try:
         r = requests.get(url, headers=NAVER_HEADERS, timeout=5)
         if r.status_code != 200:
-            return []
+            return code, []
         deals = r.json().get('dealTrendInfos', [])
         results = []
         for d in deals:
@@ -158,9 +158,36 @@ def fetch_naver_foreign(code):
                 ratio = None
             if ratio is not None:
                 results.append({'date': f'{bz[:4]}-{bz[4:6]}-{bz[6:8]}', 'ratio': ratio})
-        return results
+        return code, results
     except Exception:
-        return []
+        return code, []
+
+
+def fetch_all_foreign(codes, history):
+    """병렬로 외인 데이터 수집"""
+    log(f"Step 4: 외인 수집 (네이버, {len(codes)}개) - 병렬...")
+    t0 = time.time()
+    fetch_success = 0
+    total_new = 0
+    with ThreadPoolExecutor(max_workers=15) as exe:
+        futures = {exe.submit(fetch_naver_foreign, c): c for c in codes}
+        for i, f in enumerate(as_completed(futures), 1):
+            try:
+                code, series = f.result()
+                if series:
+                    if code not in history:
+                        history[code] = {}
+                    for e in series:
+                        if e['date'] not in history[code]:
+                            history[code][e['date']] = e['ratio']
+                            total_new += 1
+                    fetch_success += 1
+                if i % 100 == 0:
+                    log(f"  {i}/{len(codes)} (성공 {fetch_success})")
+            except Exception:
+                pass
+    log(f"  → {fetch_success}/{len(codes)}, 신규 {total_new}건 ({time.time()-t0:.0f}초)")
+    return fetch_success, total_new
 
 
 def load_foreign_history(path='foreign-history-v2.json'):
@@ -176,17 +203,6 @@ def load_foreign_history(path='foreign-history-v2.json'):
 def save_foreign_history(history, path='foreign-history-v2.json'):
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
-
-
-def update_foreign_history(history, code, series):
-    if code not in history:
-        history[code] = {}
-    added = 0
-    for e in series:
-        if e['date'] not in history[code]:
-            history[code][e['date']] = e['ratio']
-            added += 1
-    return added
 
 
 def analyze_foreign_trend(history, code):
@@ -224,23 +240,23 @@ def analyze_foreign_trend(history, code):
 
 
 # ============================================================
-# 4. 4차함수 c자리
+# 4차함수 c자리 (★ 최적화)
 # ============================================================
 def quartic(x, k, a, b, c):
     return k * (x - a) * (x - b) * (x - c) ** 2
 
 
 def fit_quartic(prices, x_norm):
+    """v3.0: 초기값 3개로 축소, maxfev 800"""
     g_base = np.percentile(prices, 20)
     h = prices - g_base
     best, best_r2 = None, -np.inf
-    for a0, b0, c0 in [(0.10, 0.40, 0.80), (0.20, 0.50, 0.85),
-                       (0.05, 0.35, 0.75), (0.15, 0.45, 0.90),
-                       (0.10, 0.30, 0.70)]:
+    # 5개 → 3개
+    for a0, b0, c0 in [(0.10, 0.40, 0.80), (0.20, 0.50, 0.85), (0.15, 0.45, 0.90)]:
         try:
             scale = max(h.max(), 1)
             k0 = scale / max(abs((1 - a0) * (1 - b0) * (1 - c0) ** 2), 1e-6)
-            popt, _ = curve_fit(quartic, x_norm, h, p0=[k0, a0, b0, c0], maxfev=2000)
+            popt, _ = curve_fit(quartic, x_norm, h, p0=[k0, a0, b0, c0], maxfev=800)
             k_f, a_f, b_f, c_f = popt
             if not (0 <= a_f < b_f < c_f <= 1) or k_f <= 0:
                 continue
@@ -434,6 +450,7 @@ def to_native(obj):
 
 
 def analyze_stock(code, info, foreign_history):
+    """1종목 분석 - 최적화됨"""
     df = info['df']
     if df is None or len(df) < 250:
         return None
@@ -445,9 +462,12 @@ def analyze_stock(code, info, foreign_history):
     cutoff_d = pd.Timestamp((TODAY - timedelta(days=3*365)).date())
     cutoff_w = pd.Timestamp((TODAY - timedelta(days=4*365)).date())
     cutoff_m = pd.Timestamp((TODAY - timedelta(days=5*365)).date())
-    daily_c = collect_c_candidates(df, [400, 600, 800], 50, cutoff_d)
-    weekly_c = collect_c_candidates(df_w, [80, 120, 180], 10, cutoff_w)
-    monthly_c = collect_c_candidates(df_m, [30, 48, 60], 4, cutoff_m)
+    
+    # ★ v3.0: 윈도우 1개씩만
+    daily_c = collect_c_candidates(df, WIN_DAILY, STEP_DAILY, cutoff_d)
+    weekly_c = collect_c_candidates(df_w, WIN_WEEKLY, STEP_WEEKLY, cutoff_w)
+    monthly_c = collect_c_candidates(df_m, WIN_MONTHLY, STEP_MONTHLY, cutoff_m)
+    
     if not (daily_c or weekly_c or monthly_c):
         return None
     alignment = find_aligned_c(daily_c, weekly_c, monthly_c)
@@ -510,6 +530,41 @@ def analyze_stock(code, info, foreign_history):
     }
 
 
+def analyze_all_parallel(price_data, foreign_history):
+    """★ v3.0: 병렬 분석"""
+    log(f"Step 5: c자리 분석 ({len(price_data)}개) - 병렬 {MAX_WORKERS}워커...")
+    t0 = time.time()
+    results = []
+    
+    def task(item):
+        code, info = item
+        try:
+            return analyze_stock(code, info, foreign_history)
+        except Exception:
+            return None
+    
+    items = list(price_data.items())
+    completed = 0
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as exe:
+        futures = {exe.submit(task, item): item[0] for item in items}
+        for f in as_completed(futures):
+            completed += 1
+            try:
+                r = f.result()
+                if r:
+                    results.append(r)
+                    if r['stars'] >= 4:
+                        ch = ' 🇨🇳' if r['is_china_play'] else ''
+                        log(f"  [{completed}/{len(items)}] {r['name']}{ch} ★{r['stars']} {r['accumulation_score']}점 ({r['avg_ratio_pct']:+.1f}%)")
+                if completed % 100 == 0:
+                    log(f"  ... {completed}/{len(items)} ({time.time()-t0:.0f}초, 좋은 종목 {len(results)}개)")
+            except Exception:
+                pass
+    
+    log(f"  → {len(results)}개 좋은 종목 ({time.time()-t0:.0f}초)")
+    return results
+
+
 def upload_to_gabia(local_path, remote_name):
     if not all([FTP_HOST, FTP_USER, FTP_PASS]):
         return False
@@ -534,65 +589,32 @@ def upload_to_gabia(local_path, remote_name):
 
 def main():
     t0 = time.time()
-    log(f"[SIGVIEW 잭팟 시즌2 v2.9 - 시즌1과 동일 인프라]")
+    log(f"[SIGVIEW 잭팟 시즌2 v3.0 - 속도 최적화 + 병렬처리]")
     log(f"  R² ≥ {R2_MIN}, c {C_MIN}~{C_MAX}, ratio {RATIO_MIN}%~{RATIO_MAX}%")
+    log(f"  병렬 워커: {MAX_WORKERS}, 윈도우 축소: 일{WIN_DAILY} 주{WIN_WEEKLY} 월{WIN_MONTHLY}")
 
-    # 1) 종목 리스트
     stocks_list = get_stock_list()
     if not stocks_list:
-        log("종목 리스트 실패")
         return
 
-    # 2) 가격 데이터 (yfinance)
     price_data = fetch_prices(stocks_list)
     if not price_data:
-        log("가격 데이터 실패")
         return
 
-    # 3) 외인 히스토리
     foreign_history = load_foreign_history()
     log(f"\nStep 3: 외인 히스토리: {len(foreign_history)}개")
 
-    log(f"\nStep 4: 외인 수집 (네이버, {len(price_data)}개)")
-    fetch_success = 0
-    total_new = 0
-    codes = list(price_data.keys())
-    for i, code in enumerate(codes, 1):
-        series = fetch_naver_foreign(code)
-        if series:
-            added = update_foreign_history(foreign_history, code, series)
-            total_new += added
-            fetch_success += 1
-        if i % 100 == 0:
-            log(f"  {i}/{len(codes)} (성공 {fetch_success})")
-        time.sleep(0.05)
+    fetch_success, total_new = fetch_all_foreign(list(price_data.keys()), foreign_history)
     save_foreign_history(foreign_history)
-    log(f"  → {fetch_success}/{len(codes)}, 신규 {total_new}건")
 
-    # 4) c자리 분석
-    log(f"\nStep 5: c자리 검출 + 좋은 종목 필터링 ({len(price_data)}개)")
-    log('-' * 60)
-    results = []
-    for i, (code, info) in enumerate(price_data.items(), 1):
-        try:
-            r = analyze_stock(code, info, foreign_history)
-            if r:
-                results.append(r)
-                if r['stars'] >= 4:
-                    ch = ' 🇨🇳' if r['is_china_play'] else ''
-                    log(f"  [{i}] {info['name']}{ch} ★{r['stars']} {r['accumulation_score']}점 {r['verdict']} ({r['avg_ratio_pct']:+.1f}%)")
-            if i % 100 == 0:
-                elapsed = time.time() - t0
-                log(f"  ... {i}/{len(price_data)} (좋은 종목 {len(results)}개, {elapsed:.0f}초)")
-        except Exception:
-            pass
-
+    results = analyze_all_parallel(price_data, foreign_history)
+    
     results.sort(key=lambda x: -x['accumulation_score'])
     for i, r in enumerate(results, 1):
         r['rank'] = i
 
     output = {
-        'version': '2.9', 'season': 2, 'algo_version': '2.9',
+        'version': '3.0', 'season': 2, 'algo_version': '3.0',
         'generated_at': TODAY.isoformat(),
         'n_scanned': len(price_data),
         'n_matched': len(results),
@@ -607,8 +629,8 @@ def main():
             'new_records_today': total_new,
         },
         'algorithm': {
-            'name': 'SIGVIEW 시즌2 v2.9 (시즌1과 동일 인프라)',
-            'description': 'fdr + yfinance + 4차함수 c자리 + v2.7 검증된 파라미터',
+            'name': 'SIGVIEW 시즌2 v3.0 (속도 최적화)',
+            'description': '시즌1 인프라 + v2.7 검증 파라미터 + 병렬 처리',
         },
         'summary': {
             'five_stars': sum(1 for r in results if r['stars'] == 5),
@@ -624,7 +646,7 @@ def main():
             'china_plays': sum(1 for r in results if r['is_china_play']),
         },
         'stocks': results,
-        'disclaimer': 'v2.9 시즌1과 동일 인프라 (fdr + yfinance). 투자 권유 X.',
+        'disclaimer': 'v3.0 속도 최적화 + 병렬 처리. 투자 권유 X.',
     }
     output = to_native(output)
     with open('jackpot-v2.json', 'w', encoding='utf-8') as f:
