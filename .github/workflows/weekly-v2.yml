@@ -1,4 +1,4 @@
-name: SIGVIEW 잭팟 시즌2 v2.2 (pykrx + 4차함수)
+name: SIGVIEW 잭팟 시즌2 v2.9 (시즌1 인프라)
 on:
   schedule:
   - cron: '0 19 * * 6'  # 매주 토 19:00 UTC = 일 04:00 KST
@@ -20,9 +20,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas numpy scipy pykrx
+          pip install requests pandas numpy scipy yfinance finance-datareader
 
-      - name: Run scanner v2 (pykrx)
+      - name: Run scanner v2 (fdr + yfinance)
         env:
           FTP_HOST: ${{ secrets.FTP_HOST }}
           FTP_USER: ${{ secrets.FTP_USER }}
