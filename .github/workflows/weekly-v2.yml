@@ -1,15 +1,13 @@
-name: SIGVIEW 잭팟 시즌2 v2.0 (4차함수 c자리)
-
+name: SIGVIEW 잭팟 시즌2 v2.2 (pykrx + 4차함수)
 on:
   schedule:
-  - cron: '0 19 * * *'  # 매일 19:00 UTC = 다음날 04:00 KST
+  - cron: '0 19 * * 6'  # 매주 토 19:00 UTC = 일 04:00 KST
   workflow_dispatch:
-
 jobs:
   scan-v2:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    
+    timeout-minutes: 25
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,15 +20,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas numpy scipy
+          pip install requests pandas numpy scipy pykrx
 
-      - name: Run scanner v2
+      - name: Run scanner v2 (pykrx)
         env:
-          KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
-          KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
-          DART_API_KEY: ${{ secrets.DART_API_KEY }}
-          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
-          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
           FTP_HOST: ${{ secrets.FTP_HOST }}
           FTP_USER: ${{ secrets.FTP_USER }}
           FTP_PASS: ${{ secrets.FTP_PASS }}
