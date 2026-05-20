@@ -1,33 +1,40 @@
 """
-fetch_data_v2.py — SIGVIEW 잭팟 시즌2 v2.8
+fetch_data_v2.py — SIGVIEW 잭팟 시즌2 v2.9
 ==========================================
-변경 (v2.7 → v2.8):
-✅ watchlist.json 재사용 (시즌1과 동기화)
-✅ pykrx 시총 조회 실패 시 자동 fallback
-✅ 521개 종목 분석 (28개 → 521개)
-✅ 3가지 watchlist.json 구조 자동 인식
+변경 (v2.8 → v2.9):
+✅ pykrx 제거 → FinanceDataReader + yfinance (시즌1과 동일!)
+✅ 시총 5천억+ 종목 자동 (521개 예상)
+✅ 시즌1과 인프라 통합 = 안정성 ★
 
-★ 진짜 시즌2 완성 — 시즌1과 동일한 종목 풀!
+알고리즘:
+- v2.7 검증된 파라미터 유지 (R²=0.25, c=0.50~0.95, ratio -50~+30)
+- 4차함수 c자리 자동 검출 (★ 시즌2 핵심)
+- 외인 매집 + 20일선 + 중국 수혜
 """
 import os, json, time, warnings
 from datetime import datetime, timezone, timedelta
 from ftplib import FTP
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 import pandas as pd
 import numpy as np
 from scipy.optimize import curve_fit
-from pykrx import stock
+import yfinance as yf
+import FinanceDataReader as fdr
 
 warnings.filterwarnings('ignore')
 
 FTP_HOST = os.environ.get('FTP_HOST', '')
 FTP_USER = os.environ.get('FTP_USER', '')
 FTP_PASS = os.environ.get('FTP_PASS', '')
-FTP_TARGET_DIR = os.environ.get('FTP_TARGET_DIR', '/public_html/wp-content/data')
+FTP_TARGET_DIR = os.environ.get('FTP_TARGET_DIR', '/wp-content/data')
 
 KST = timezone(timedelta(hours=9))
 TODAY = datetime.now(KST)
+
+# 시총 5천억 이상 (시즌1과 동일)
+THRESHOLD = 500_000_000_000
 
 # v2.7 검증된 최적 파라미터
 R2_MIN = 0.25
@@ -39,25 +46,6 @@ ALIGN_DW_MAX = 8
 ALIGN_WM_MAX = 14
 ALIGN_DM_MAX = 14
 
-
-def get_recent_trading_day():
-    for days_back in range(0, 8):
-        check_date = TODAY - timedelta(days=days_back)
-        date_str = check_date.strftime('%Y%m%d')
-        try:
-            test = stock.get_index_ohlcv(date_str, date_str, '1001')
-            if test is not None and len(test) > 0:
-                return date_str
-        except Exception:
-            continue
-    return (TODAY - timedelta(days=1)).strftime('%Y%m%d')
-
-
-TODAY_STR = get_recent_trading_day()
-print(f'[INIT] 분석 기준일: {TODAY_STR}')
-
-START_DATE = (TODAY - timedelta(days=5*365)).strftime('%Y%m%d')
-
 CHINA_DIRECT = {
     '005490','004020','010130','103140','460860','001230','001430',
     '003030','016380','005010','011170','009830','011780','096770',
@@ -66,164 +54,85 @@ CHINA_DIRECT = {
 }
 
 
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
 # ============================================================
-# ★ v2.8 핵심: watchlist.json 재사용
+# 1. 종목 리스트 (시즌1과 동일 - fdr 사용)
 # ============================================================
-def load_watchlist():
-    """시즌1의 watchlist.json 재사용 - 3가지 구조 자동 인식"""
-    if not os.path.exists('watchlist.json'):
-        print('  ⚠ watchlist.json 없음')
-        return []
+def get_stock_list():
+    """시즌1과 동일: KRX 시총 5천억+ 자동"""
+    log("Step 1: 시총 5천억+ 종목 리스트 (fdr.StockListing)...")
     try:
-        with open('watchlist.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        stocks = []
-        
-        # 구조 1: [{"code": "005930", "name": "삼성전자"}, ...]
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict):
-                    code = item.get('code') or item.get('ticker') or item.get('symbol')
-                    name = item.get('name') or item.get('종목명') or ''
-                    mcap = item.get('mcap', 0) or item.get('시가총액', 0) or 0
-                    if code:
-                        stocks.append({'code': str(code).zfill(6), 'name': str(name), 'mcap': int(mcap)})
-                elif isinstance(item, str):
-                    stocks.append({'code': item.zfill(6), 'name': '', 'mcap': 0})
-        
-        # 구조 2: {"005930": "삼성전자", "000660": "SK하이닉스", ...}
-        elif isinstance(data, dict):
-            # 키가 종목코드인지 체크 (6자리 숫자)
-            sample_keys = list(data.keys())[:5]
-            is_code_key = all(k.isdigit() and len(k) <= 6 for k in sample_keys)
-            
-            if is_code_key:
-                for code, val in data.items():
-                    if isinstance(val, str):
-                        stocks.append({'code': code.zfill(6), 'name': val, 'mcap': 0})
-                    elif isinstance(val, dict):
-                        name = val.get('name') or val.get('종목명') or ''
-                        mcap = val.get('mcap', 0) or val.get('시가총액', 0) or 0
-                        stocks.append({'code': code.zfill(6), 'name': str(name), 'mcap': int(mcap)})
-                    elif isinstance(val, (int, float)):
-                        # 값이 숫자면 시총일 수도
-                        stocks.append({'code': code.zfill(6), 'name': '', 'mcap': int(val)})
-            
-            # 구조 3: {"stocks": [...]} 또는 {"watchlist": [...]}
-            else:
-                for key in ['stocks', 'watchlist', 'items', 'data', 'list']:
-                    if key in data and isinstance(data[key], list):
-                        for item in data[key]:
-                            if isinstance(item, dict):
-                                code = item.get('code') or item.get('ticker') or item.get('symbol')
-                                name = item.get('name') or item.get('종목명') or ''
-                                mcap = item.get('mcap', 0) or item.get('시가총액', 0) or 0
-                                if code:
-                                    stocks.append({'code': str(code).zfill(6), 'name': str(name), 'mcap': int(mcap)})
-                        break
-        
-        print(f'  ✓ watchlist.json 로드: {len(stocks)}개 종목')
-        return stocks
+        krx = fdr.StockListing('KRX')
+        krx = krx[krx['Market'].isin(['KOSPI', 'KOSDAQ'])]
+        filtered = krx[krx['Marcap'] >= THRESHOLD].copy()
+        filtered = filtered.sort_values('Marcap', ascending=False).reset_index(drop=True)
+        result = []
+        for _, row in filtered.iterrows():
+            result.append({
+                'code': row['Code'],
+                'name': row['Name'],
+                'market': row['Market'],
+                'mcap': int(row['Marcap']),
+            })
+        log(f"  → {len(result)}개 종목 (시즌1과 동일 풀)")
+        return result
     except Exception as e:
-        print(f'  ✗ watchlist.json 로드 실패: {e}')
+        log(f"  ✗ fdr 실패: {e}")
         return []
 
 
-def get_stock_names_from_pykrx(stocks):
-    """이름 빠진 종목 보충 (선택적)"""
-    no_name = [s for s in stocks if not s['name']]
-    if not no_name:
-        return stocks
-    
-    print(f'  종목명 보충 시도: {len(no_name)}개')
-    success = 0
-    for s in no_name:
+# ============================================================
+# 2. 가격 데이터 (yfinance, 시즌1과 동일)
+# ============================================================
+def fetch_prices(stocks):
+    """yfinance로 10년치 일봉 - 시즌1과 동일"""
+    log(f"Step 2: 가격 데이터 ({len(stocks)}종목, yfinance)...")
+    all_data = {}
+    BATCH = 50
+    t0 = time.time()
+    for i in range(0, len(stocks), BATCH):
+        batch = stocks[i:i+BATCH]
+        codes_yf = [f"{s['code']}.{'KS' if s['market']=='KOSPI' else 'KQ'}" for s in batch]
         try:
-            name = stock.get_market_ticker_name(s['code'])
-            if name:
-                s['name'] = name
-                success += 1
+            data = yf.download(codes_yf, period='10y', interval='1d',
+                              group_by='ticker', progress=False, threads=True,
+                              auto_adjust=True)
         except Exception:
-            s['name'] = f"종목{s['code']}"
-        time.sleep(0.05)
-    print(f'  ✓ 종목명 {success}개 보충')
-    return stocks
-
-
-def get_stocks_via_pykrx(n=500):
-    """pykrx로 시총 상위 N개 가져오기 (fallback)"""
-    print(f'\n[backup] pykrx로 시총 상위 {n}개 시도...')
-    for attempt in range(2):
-        try:
-            kospi = stock.get_market_cap_by_ticker(TODAY_STR, market='KOSPI')
-            time.sleep(0.5)
-            kosdaq = stock.get_market_cap_by_ticker(TODAY_STR, market='KOSDAQ')
-            if kospi is None or len(kospi) == 0:
-                raise Exception('빈 데이터')
-            all_stocks = pd.concat([kospi, kosdaq])
-            all_stocks = all_stocks.sort_values('시가총액', ascending=False).head(n)
-            result = []
-            for code in all_stocks.index:
-                try:
-                    name = stock.get_market_ticker_name(code)
-                    mcap = int(all_stocks.loc[code, '시가총액'] / 1e8)
-                    result.append({'code': code, 'name': name, 'mcap': mcap})
-                except Exception:
-                    continue
-            print(f'  ✓ {len(result)}개')
-            return result
-        except Exception as e:
-            print(f'  ✗ 시도 {attempt+1}: {str(e)[:60]}')
-            time.sleep(2)
-    return []
-
-
-def get_stocks_list():
-    """★ v2.8: watchlist.json 우선, 실패 시 pykrx fallback"""
-    print('\n[1] 종목 리스트 로드')
-    # 1순위: watchlist.json
-    stocks = load_watchlist()
-    if stocks and len(stocks) >= 100:
-        stocks = get_stock_names_from_pykrx(stocks)
-        return stocks
-    # 2순위: pykrx
-    print('  → watchlist.json 부족, pykrx 시도')
-    stocks = get_stocks_via_pykrx(500)
-    if stocks:
-        return stocks
-    # 3순위: 최후 fallback
-    print('  → 최후 fallback 28개')
-    FB = [
-        ('005930','삼성전자'),('000660','SK하이닉스'),('373220','LG에너지솔루션'),
-        ('005380','현대차'),('000270','기아'),('005490','POSCO홀딩스'),
-        ('051910','LG화학'),('006400','삼성SDI'),('035420','NAVER'),
-        ('042700','한미반도체'),('329180','HD현대중공업'),('009540','HD한국조선해양'),
-        ('010140','삼성중공업'),('042660','한화오션'),('011170','롯데케미칼'),
-        ('011780','금호석유'),('096770','SK이노베이션'),('010950','S-Oil'),
-        ('004020','현대제철'),('010130','고려아연'),('011200','HMM'),
-        ('028670','팬오션'),('001120','LX인터내셔널'),('047050','포스코인터내셔널'),
-        ('267250','HD현대'),('012450','한화에어로스페이스'),('079550','LIG넥스원'),
-        ('005880','대한해운'),
-    ]
-    return [{'code': c, 'name': n, 'mcap': 0} for c, n in FB]
-
-
-def get_ohlc(code):
-    for _ in range(2):
-        try:
-            df = stock.get_market_ohlcv(START_DATE, TODAY_STR, code)
-            if df is None or len(df) < 250:
-                return None
-            df = df[df['종가'] > 0]
-            return df
-        except Exception:
-            time.sleep(0.3)
-    return None
+            continue
+        for s in batch:
+            yf_code = f"{s['code']}.{'KS' if s['market']=='KOSPI' else 'KQ'}"
+            try:
+                df = data[yf_code] if len(codes_yf) > 1 else data
+                df = df.dropna()
+                if len(df) > 250:
+                    # 한글 컬럼명으로 변환 (시즌2 알고리즘 호환)
+                    result_df = pd.DataFrame({
+                        '시가': df['Open'],
+                        '고가': df['High'],
+                        '저가': df['Low'],
+                        '종가': df['Close'],
+                        '거래량': df['Volume'],
+                    }, index=df.index)
+                    all_data[s['code']] = {
+                        'name': s['name'],
+                        'market': s['market'],
+                        'mcap': int(s['mcap']),
+                        'df': result_df,
+                    }
+            except Exception:
+                pass
+        if i % 100 == 0:
+            log(f"  ... {i}/{len(stocks)} ({time.time()-t0:.0f}초)")
+        time.sleep(0.3)
+    log(f"  → {len(all_data)}개 가격 데이터 ({time.time()-t0:.0f}초)")
+    return all_data
 
 
 # ============================================================
-# 네이버 외인
+# 3. 네이버 외인 (5일치 매주 누적)
 # ============================================================
 NAVER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -315,7 +224,7 @@ def analyze_foreign_trend(history, code):
 
 
 # ============================================================
-# 4차함수 c자리
+# 4. 4차함수 c자리
 # ============================================================
 def quartic(x, k, a, b, c):
     return k * (x - a) * (x - b) * (x - c) ** 2
@@ -524,8 +433,8 @@ def to_native(obj):
     return obj
 
 
-def analyze_stock(code, name, mcap, foreign_history):
-    df = get_ohlc(code)
+def analyze_stock(code, info, foreign_history):
+    df = info['df']
     if df is None or len(df) < 250:
         return None
     df_w = resample_w(df)
@@ -564,11 +473,11 @@ def analyze_stock(code, name, mcap, foreign_history):
     
     verdict = VERDICTS.get(phase, '—')
     is_china = code in CHINA_DIRECT
-    score = calc_score(alignment['stars'], phase, ma20['is_stealth'], 
+    score = calc_score(alignment['stars'], phase, ma20['is_stealth'],
                        foreign['trend'], is_china, avg_ratio)
     
     return {
-        'code': code, 'name': name, 'mcap': mcap,
+        'code': code, 'name': info['name'], 'mcap': int(info['mcap']/1e8),
         'stars': int(alignment['stars']),
         'phase': phase, 'verdict': verdict,
         'accumulation_score': score,
@@ -616,56 +525,65 @@ def upload_to_gabia(local_path, remote_name):
         with open(local_path, 'rb') as f:
             ftp.storbinary(f'STOR {remote_name}', f)
         ftp.quit()
-        print(f'  ✓ FTP: {FTP_TARGET_DIR}/{remote_name}')
+        log(f"  ✓ FTP: {FTP_TARGET_DIR}/{remote_name}")
         return True
     except Exception as e:
-        print(f'  ✗ FTP 실패: {e}')
+        log(f"  ✗ FTP 실패: {e}")
         return False
 
 
 def main():
     t0 = time.time()
-    print(f'[SIGVIEW 잭팟 시즌2 v2.8 - watchlist.json 재사용]')
-    print(f'  R² ≥ {R2_MIN}, c {C_MIN}~{C_MAX}, ratio {RATIO_MIN}%~{RATIO_MAX}%')
+    log(f"[SIGVIEW 잭팟 시즌2 v2.9 - 시즌1과 동일 인프라]")
+    log(f"  R² ≥ {R2_MIN}, c {C_MIN}~{C_MAX}, ratio {RATIO_MIN}%~{RATIO_MAX}%")
 
-    stocks_list = get_stocks_list()
+    # 1) 종목 리스트
+    stocks_list = get_stock_list()
     if not stocks_list:
-        print('종목 리스트 실패')
+        log("종목 리스트 실패")
         return
-    print(f'\n  → 총 {len(stocks_list)}개 종목 분석 시작')
 
+    # 2) 가격 데이터 (yfinance)
+    price_data = fetch_prices(stocks_list)
+    if not price_data:
+        log("가격 데이터 실패")
+        return
+
+    # 3) 외인 히스토리
     foreign_history = load_foreign_history()
-    print(f'\n[2] 외인 히스토리: {len(foreign_history)}개')
+    log(f"\nStep 3: 외인 히스토리: {len(foreign_history)}개")
 
-    print(f'\n[3] 외인 수집 (네이버, {len(stocks_list)}개)')
+    log(f"\nStep 4: 외인 수집 (네이버, {len(price_data)}개)")
     fetch_success = 0
     total_new = 0
-    for i, s in enumerate(stocks_list, 1):
-        series = fetch_naver_foreign(s['code'])
+    codes = list(price_data.keys())
+    for i, code in enumerate(codes, 1):
+        series = fetch_naver_foreign(code)
         if series:
-            added = update_foreign_history(foreign_history, s['code'], series)
+            added = update_foreign_history(foreign_history, code, series)
             total_new += added
             fetch_success += 1
         if i % 100 == 0:
-            print(f'  {i}/{len(stocks_list)} (성공 {fetch_success})')
+            log(f"  {i}/{len(codes)} (성공 {fetch_success})")
         time.sleep(0.05)
     save_foreign_history(foreign_history)
-    print(f'  ✓ {fetch_success}/{len(stocks_list)}, 신규 {total_new}건')
+    log(f"  → {fetch_success}/{len(codes)}, 신규 {total_new}건")
 
-    print(f'\n[4] c자리 검출 + 좋은 종목 필터링 ({len(stocks_list)}개)')
-    print('-' * 60)
+    # 4) c자리 분석
+    log(f"\nStep 5: c자리 검출 + 좋은 종목 필터링 ({len(price_data)}개)")
+    log('-' * 60)
     results = []
-    for i, s in enumerate(stocks_list, 1):
+    for i, (code, info) in enumerate(price_data.items(), 1):
         try:
-            r = analyze_stock(s['code'], s['name'], s['mcap'], foreign_history)
+            r = analyze_stock(code, info, foreign_history)
             if r:
                 results.append(r)
-                ch = ' 🇨🇳' if r['is_china_play'] else ''
-                if r['stars'] >= 4:  # ★★★★+만 출력 (로그 절약)
-                    print(f'  [{i}] {s["name"]}{ch} ★{r["stars"]} {r["accumulation_score"]}점 {r["verdict"]} ({r["avg_ratio_pct"]:+.1f}%)')
+                if r['stars'] >= 4:
+                    ch = ' 🇨🇳' if r['is_china_play'] else ''
+                    log(f"  [{i}] {info['name']}{ch} ★{r['stars']} {r['accumulation_score']}점 {r['verdict']} ({r['avg_ratio_pct']:+.1f}%)")
             if i % 100 == 0:
                 elapsed = time.time() - t0
-                print(f'  ... {i}/{len(stocks_list)} (좋은 종목 {len(results)}개, {elapsed:.0f}초)')
+                log(f"  ... {i}/{len(price_data)} (좋은 종목 {len(results)}개, {elapsed:.0f}초)")
         except Exception:
             pass
 
@@ -674,10 +592,9 @@ def main():
         r['rank'] = i
 
     output = {
-        'version': '2.8', 'season': 2, 'algo_version': '2.8',
+        'version': '2.9', 'season': 2, 'algo_version': '2.9',
         'generated_at': TODAY.isoformat(),
-        'analysis_date': TODAY_STR,
-        'n_scanned': len(stocks_list),
+        'n_scanned': len(price_data),
         'n_matched': len(results),
         'parameters': {
             'r2_min': R2_MIN, 'c_min': C_MIN, 'c_max': C_MAX,
@@ -690,8 +607,8 @@ def main():
             'new_records_today': total_new,
         },
         'algorithm': {
-            'name': 'SIGVIEW 시즌2 v2.8 (watchlist.json 재사용)',
-            'description': '시즌1과 동일 종목 풀 + v2.7 검증된 파라미터',
+            'name': 'SIGVIEW 시즌2 v2.9 (시즌1과 동일 인프라)',
+            'description': 'fdr + yfinance + 4차함수 c자리 + v2.7 검증된 파라미터',
         },
         'summary': {
             'five_stars': sum(1 for r in results if r['stars'] == 5),
@@ -707,22 +624,22 @@ def main():
             'china_plays': sum(1 for r in results if r['is_china_play']),
         },
         'stocks': results,
-        'disclaimer': 'v2.8 watchlist.json 재사용 (시즌1 동기화). 투자 권유 X.',
+        'disclaimer': 'v2.9 시즌1과 동일 인프라 (fdr + yfinance). 투자 권유 X.',
     }
     output = to_native(output)
     with open('jackpot-v2.json', 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
     elapsed = time.time() - t0
-    print(f'\n저장: {len(results)}개 좋은 종목 / {len(stocks_list)}개 분석')
-    print(f'시간: {elapsed:.0f}초 ({elapsed/60:.1f}분)')
+    log(f"\n저장: {len(results)}개 좋은 종목 / {len(price_data)}개 분석")
+    log(f"시간: {elapsed:.0f}초 ({elapsed/60:.1f}분)")
 
-    print('\n[5] FTP 업로드')
+    log("\nStep 6: FTP 업로드")
     upload_to_gabia('jackpot-v2.json', 'jackpot-v2.json')
     if os.path.exists('foreign-history-v2.json'):
         upload_to_gabia('foreign-history-v2.json', 'foreign-history-v2.json')
 
-    print(f'\n✅ 완료')
+    log(f"\n✅ 완료")
 
 
 if __name__ == '__main__':
