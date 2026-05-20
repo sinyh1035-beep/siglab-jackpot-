@@ -1,16 +1,23 @@
 """
-fetch_data_v2.py — SIGVIEW 잭팟 시즌2 v2.0
+fetch_data_v2.py — SIGVIEW 잭팟 시즌2 v2.2 (pykrx 버전)
 ==========================================
-시즌1 인프라 활용 (KIS API + DART API + Gabia FTP)
-시즌2 핵심 = 4차함수 c자리 자동 검출 (★ 형 그림 그대로)
+★ 시즌1처럼 3분컷 - pykrx 사용
 
-생성 파일: jackpot-v2.json
-업로드 대상: Gabia FTP /public_html/wp-content/data/jackpot-v2.json
+변경사항 (v2.1 → v2.2):
+✅ KIS API 제거 → pykrx 사용 (시즌1과 동일 인프라)
+✅ 1번 호출로 5년치 받음 (페이지네이션 X)
+✅ 500종목 가능
+✅ 4차함수 c자리는 그대로 유지 (★ 형 그림)
+
+흐름:
+1. pykrx로 KOSPI+KOSDAQ 모든 종목 (~2500개) 시총순 정렬
+2. 상위 500개 OHLC 5년치 받기 (3분)
+3. 4차함수 c자리 자동 검출
+4. 외인 보유율 (네이버 5일치)
+5. 점수 산정 + JSON 저장
+6. Gabia FTP 업로드
 """
-import os
-import json
-import time
-import warnings
+import os, json, time, warnings
 from datetime import datetime, timezone, timedelta
 from ftplib import FTP
 
@@ -18,17 +25,13 @@ import requests
 import pandas as pd
 import numpy as np
 from scipy.optimize import curve_fit
+from pykrx import stock
 
 warnings.filterwarnings('ignore')
 
 # ============================================================
-# 환경 변수 (GitHub Actions Secrets)
+# 환경변수
 # ============================================================
-KIS_APP_KEY = os.environ.get('KIS_APP_KEY', '')
-KIS_APP_SECRET = os.environ.get('KIS_APP_SECRET', '')
-DART_API_KEY = os.environ.get('DART_API_KEY', '')
-NAVER_CLIENT_ID = os.environ.get('NAVER_CLIENT_ID', '')
-NAVER_CLIENT_SECRET = os.environ.get('NAVER_CLIENT_SECRET', '')
 FTP_HOST = os.environ.get('FTP_HOST', '')
 FTP_USER = os.environ.get('FTP_USER', '')
 FTP_PASS = os.environ.get('FTP_PASS', '')
@@ -38,242 +41,95 @@ KST = timezone(timedelta(hours=9))
 TODAY = datetime.now(KST)
 TODAY_STR = TODAY.strftime('%Y%m%d')
 
-# ============================================================
-# 종목 풀 - 코스피200 + 코스닥150 핵심 cyclical
-# (시즌1 watchlist 와 별도. 시즌2는 c자리 자동 검출 대상이라 더 넓게)
-# ============================================================
-UNIVERSE = {
-    # === 반도체/IT ===
-    '005930': '삼성전자', '000660': 'SK하이닉스', '042700': '한미반도체',
-    '058470': '리노공업', '039030': '이오테크닉스', '000990': 'DB하이텍',
-    '240810': '원익IPS', '357780': '솔브레인',
-    # === 2차전지 ===
-    '373220': 'LG에너지솔루션', '006400': '삼성SDI', '051910': 'LG화학',
-    '003670': '포스코퓨처엠', '247540': '에코프로비엠', '086520': '에코프로',
-    '066970': '엘앤에프', '005070': '코스모신소재', '361610': 'SK아이이테크놀로지',
-    '093370': '후성',
-    # === 자동차 ===
-    '005380': '현대차', '000270': '기아', '012330': '현대모비스',
-    '161390': '한국타이어', '204320': 'HL만도', '018880': '한온시스템',
-    '002350': '넥센타이어', '011210': '현대위아',
-    # === 조선/기계/중공업 ===
-    '009540': 'HD한국조선해양', '010140': '삼성중공업', '042660': '한화오션',
-    '010620': 'HD현대미포', '267260': 'HD현대일렉트릭', '042670': 'HD현대인프라코어',
-    '267270': 'HD현대건설기계', '241560': '두산밥캣', '034020': '두산에너빌리티',
-    '000150': '두산',
-    # === 철강/비철 ===
-    '005490': 'POSCO홀딩스', '004020': '현대제철', '010130': '고려아연',
-    '103140': '풍산', '460860': '동국제강', '001230': '동국홀딩스',
-    '001430': '세아베스틸지주', '003030': '세아제강지주', '016380': 'KG스틸',
-    '005010': '휴스틸', '000670': '영풍',
-    # === 화학/정유 ===
-    '011170': '롯데케미칼', '009830': '한화솔루션', '011780': '금호석유',
-    '096770': 'SK이노베이션', '010950': 'S-Oil', '011790': 'SKC',
-    '298050': '효성첨단소재', '298000': '효성화학', '010060': 'OCI홀딩스',
-    '120110': '코오롱인더', '006650': '대한유화',
-    # === 건설/건자재 ===
-    '000720': '현대건설', '006360': 'GS건설', '047040': '대우건설',
-    '375500': 'DL이앤씨', '294870': 'HDC현대산업개발', '002380': 'KCC',
-    '003410': '쌍용씨앤이', '183190': '아세아시멘트', '012630': 'HDC',
-    '002990': '금호건설', '010780': '아이에스동서',
-    # === 운송/항공 ===
-    '011200': 'HMM', '028670': '팬오션', '003490': '대한항공',
-    '272450': '진에어', '089590': '제주항공', '003200': '일양약품',
-    # === 방산/항공우주 ===
-    '012450': '한화에어로스페이스', '047810': '한국항공우주', '079550': 'LIG넥스원',
-    '272210': '한화시스템',
-    # === 풍력/원자력/유틸리티 ===
-    '112610': '씨에스윈드', '052690': '한전기술', '051600': '한전KPS',
-    '015760': '한국전력',
-    # === 종합상사 ===
-    '267250': 'HD현대', '329180': 'HD현대중공업', '001120': 'LX인터내셔널',
-    '001250': 'GS글로벌', '047050': '포스코인터내셔널', '028050': '삼성E&A',
-    '004990': '롯데지주', '000880': '한화', '004800': '효성',
-    # === 음식료/소비재 cyclical ===
-    '003230': '삼양식품', '383220': 'F&F', '004170': '신세계',
-    '139480': '이마트',
-}
+# 500종목까지
+MAX_STOCKS = 500
+# OHLC 5년치
+START_DATE = (TODAY - timedelta(days=5*365)).strftime('%Y%m%d')
 
 # 중국 직접 수혜
 CHINA_DIRECT = {
-    '005490', '004020', '010130', '103140', '460860', '001230', '001430',
-    '003030', '016380', '005010', '011170', '009830', '011780', '096770',
-    '010950', '009540', '010140', '042660', '267260', '329180', '034020',
-    '011200', '028670', '267250', '003490', '001120', '001250', '047050',
+    '005490','004020','010130','103140','460860','001230','001430',
+    '003030','016380','005010','011170','009830','011780','096770',
+    '010950','009540','010140','042660','267260','329180','034020',
+    '011200','028670','267250','003490','001120','001250','047050',
 }
 
 # ============================================================
-# KIS API 클라이언트 (시즌1 키 재사용)
+# 1. 시총 상위 N개 종목 가져오기 (pykrx 1번 호출)
 # ============================================================
-class KISClient:
-    """한국투자증권 API 클라이언트 - OHLC + 외인 데이터"""
-    BASE_URL = 'https://openapi.koreainvestment.com:9443'
-    
-    def __init__(self, app_key, app_secret):
-        self.app_key = app_key
-        self.app_secret = app_secret
-        self.token = None
-        self.token_expires = None
-    
-    def get_token(self):
-        if self.token and self.token_expires and datetime.now() < self.token_expires:
-            return self.token
-        url = f'{self.BASE_URL}/oauth2/tokenP'
-        headers = {'content-type': 'application/json'}
-        body = {
-            'grant_type': 'client_credentials',
-            'appkey': self.app_key,
-            'appsecret': self.app_secret,
-        }
-        try:
-            r = requests.post(url, headers=headers, json=body, timeout=10)
-            r.raise_for_status()
-            data = r.json()
-            self.token = data['access_token']
-            expires_in = int(data.get('expires_in', 86400))
-            self.token_expires = datetime.now() + timedelta(seconds=expires_in - 300)
-            return self.token
-        except Exception as e:
-            print(f'KIS 토큰 발급 실패: {e}')
-            return None
-    
-    def get_daily_ohlc(self, code, start_date, end_date):
-        """일봉 OHLC. start/end YYYYMMDD"""
-        token = self.get_token()
-        if not token:
-            return None
-        url = f'{self.BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice'
-        headers = {
-            'content-type': 'application/json',
-            'authorization': f'Bearer {token}',
-            'appkey': self.app_key,
-            'appsecret': self.app_secret,
-            'tr_id': 'FHKST03010100',
-        }
-        # KIS는 한 번에 100일 정도만 줘서 여러 번 호출 필요
-        rows_all = []
-        cursor_end = end_date
-        max_calls = 30  # 안전 장치 (약 3000일 = 12년)
-        for _ in range(max_calls):
-            params = {
-                'fid_cond_mrkt_div_code': 'J',
-                'fid_input_iscd': code,
-                'fid_input_date_1': start_date,
-                'fid_input_date_2': cursor_end,
-                'fid_period_div_code': 'D',
-                'fid_org_adj_prc': '0',  # 수정주가
-            }
+def get_top_stocks(n=500):
+    print(f'[1] KOSPI+KOSDAQ 시총 상위 {n}개 가져오는 중...')
+    try:
+        kospi = stock.get_market_cap_by_ticker(TODAY_STR, market='KOSPI')
+        kosdaq = stock.get_market_cap_by_ticker(TODAY_STR, market='KOSDAQ')
+        all_stocks = pd.concat([kospi, kosdaq])
+        all_stocks = all_stocks.sort_values('시가총액', ascending=False).head(n)
+        result = []
+        for code in all_stocks.index:
             try:
-                r = requests.get(url, headers=headers, params=params, timeout=15)
-                if r.status_code != 200:
-                    break
-                data = r.json()
-                rows = data.get('output2', [])
-                if not rows:
-                    break
-                rows_all.extend(rows)
-                # 가장 오래된 날짜가 start_date보다 작으면 끝
-                oldest = rows[-1].get('stck_bsop_date')
-                if not oldest or oldest <= start_date:
-                    break
-                # 다음 페이지 = 이전 가장 오래된 날 하루 전
-                old_dt = datetime.strptime(oldest, '%Y%m%d')
-                cursor_end = (old_dt - timedelta(days=1)).strftime('%Y%m%d')
-                time.sleep(0.2)
-            except Exception as e:
-                print(f'    KIS OHLC {code} 에러: {e}')
-                break
-        if not rows_all:
-            return None
-        # DataFrame 변환
-        df = pd.DataFrame(rows_all)
-        df['date'] = pd.to_datetime(df['stck_bsop_date'])
-        df['종가'] = df['stck_clpr'].astype(float)
-        df['시가'] = df['stck_oprc'].astype(float)
-        df['고가'] = df['stck_hgpr'].astype(float)
-        df['저가'] = df['stck_lwpr'].astype(float)
-        df['거래량'] = df['acml_vol'].astype(float)
-        df = df.set_index('date').sort_index()
-        df = df[['시가', '고가', '저가', '종가', '거래량']]
-        # 중복 제거
-        df = df[~df.index.duplicated(keep='first')]
-        return df
-    
-    def get_foreign_ratio(self, code):
-        """외인 보유율 (현재)"""
-        token = self.get_token()
-        if not token:
-            return None
-        url = f'{self.BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-investor'
-        headers = {
-            'content-type': 'application/json',
-            'authorization': f'Bearer {token}',
-            'appkey': self.app_key,
-            'appsecret': self.app_secret,
-            'tr_id': 'FHKST01010900',
-        }
-        params = {
-            'fid_cond_mrkt_div_code': 'J',
-            'fid_input_iscd': code,
-        }
-        try:
-            r = requests.get(url, headers=headers, params=params, timeout=10)
-            if r.status_code != 200:
-                return None
-            data = r.json()
-            rows = data.get('output', [])
-            if not rows:
-                return None
-            # 가장 최근 행
-            latest = rows[0]
-            return {
-                'foreign_ratio': float(latest.get('hts_frgn_ehrt', 0) or 0),
-                'foreign_net_buy': int(latest.get('frgn_ntby_qty', 0) or 0),
-                'organ_net_buy': int(latest.get('orgn_ntby_qty', 0) or 0),
-                'date': latest.get('stck_bsop_date', ''),
-            }
-        except Exception as e:
-            return None
+                name = stock.get_market_ticker_name(code)
+                mcap = int(all_stocks.loc[code, '시가총액'] / 1e8)
+                result.append({'code': code, 'name': name, 'mcap': mcap})
+            except Exception:
+                continue
+        print(f'  ✓ {len(result)}개 종목 확보')
+        return result
+    except Exception as e:
+        print(f'  ✗ 종목 리스트 실패: {e}')
+        return []
 
 
 # ============================================================
-# 네이버 외인 (KIS 보완용 - 종목별 외인 보유율 5일치 시계열)
+# 2. OHLC 다운로드 (pykrx, 5년치 1번 호출)
+# ============================================================
+def get_ohlc(code):
+    try:
+        df = stock.get_market_ohlcv(START_DATE, TODAY_STR, code)
+        if df is None or len(df) < 250:
+            return None
+        df = df[df['종가'] > 0]
+        return df
+    except Exception:
+        return None
+
+
+# ============================================================
+# 3. 네이버 외인 보유율 (5일치 누적용)
 # ============================================================
 NAVER_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Accept': 'application/json,text/plain,*/*',
 }
 
-def fetch_naver_foreign_series(code):
-    """네이버에서 외인 5일치 시계열 받기 - KIS와 교차 검증"""
+def fetch_naver_foreign(code):
     url = f'https://m.stock.naver.com/api/stock/{code}/integration'
     try:
-        r = requests.get(url, headers=NAVER_HEADERS, timeout=10)
+        r = requests.get(url, headers=NAVER_HEADERS, timeout=5)
         if r.status_code != 200:
             return []
-        data = r.json()
-        deals = data.get('dealTrendInfos', [])
+        deals = r.json().get('dealTrendInfos', [])
         results = []
         for d in deals:
-            bizdate = d.get('bizdate', '')
-            if not bizdate or len(bizdate) != 8:
+            bz = d.get('bizdate', '')
+            if not bz or len(bz) != 8:
                 continue
-            ratio_str = str(d.get('foreignerHoldRatio', '')).replace('%', '').replace(',', '').strip()
+            rs = str(d.get('foreignerHoldRatio', '')).replace('%','').replace(',','').strip()
             try:
-                ratio = float(ratio_str) if ratio_str else None
+                ratio = float(rs) if rs else None
             except ValueError:
                 ratio = None
-            results.append({
-                'date': f'{bizdate[:4]}-{bizdate[4:6]}-{bizdate[6:8]}',
-                'foreign_ratio': ratio,
-            })
+            if ratio is not None:
+                results.append({
+                    'date': f'{bz[:4]}-{bz[4:6]}-{bz[6:8]}',
+                    'ratio': ratio,
+                })
         return results
     except Exception:
         return []
 
 
 # ============================================================
-# 외인 보유율 누적 히스토리 (Gabia에 저장될 별도 파일)
+# 4. 외인 히스토리 누적
 # ============================================================
 def load_foreign_history(path='foreign-history-v2.json'):
     if not os.path.exists(path):
@@ -293,62 +149,60 @@ def save_foreign_history(history, path='foreign-history-v2.json'):
 def update_foreign_history(history, code, series):
     if code not in history:
         history[code] = {}
-    existing_dates = set(history[code].keys())
     added = 0
-    for entry in series:
-        if entry['date'] not in existing_dates and entry.get('foreign_ratio') is not None:
-            history[code][entry['date']] = entry['foreign_ratio']
+    for e in series:
+        if e['date'] not in history[code]:
+            history[code][e['date']] = e['ratio']
             added += 1
     return added
 
 
 def analyze_foreign_trend(history, code):
-    """외인 보유율 추세 분석"""
-    from scipy.stats import linregress
     if code not in history or not history[code]:
-        return {'trend': 'no_data', 'latest_ratio': None, 'change_30d': None, 'data_points': 0}
-    series = sorted(history[code].items())  # [(date, ratio), ...]
+        return {'trend': 'no_data', 'latest': None, 'change_30d': None, 'points': 0}
+    series = sorted(history[code].items())
     if not series:
-        return {'trend': 'no_data', 'latest_ratio': None, 'change_30d': None, 'data_points': 0}
-    latest_ratio = series[-1][1]
+        return {'trend': 'no_data', 'latest': None, 'change_30d': None, 'points': 0}
+    latest = series[-1][1]
     n = len(series)
     change_30d = None
     if n >= 2:
         cutoff = (TODAY - timedelta(days=30)).strftime('%Y-%m-%d')
         old = [s for s in series if s[0] <= cutoff]
         if old:
-            change_30d = round(latest_ratio - old[-1][1], 2)
-    slope_per_month = 0.0
+            change_30d = round(latest - old[-1][1], 2)
+    slope = 0.0
     if n >= 5:
         try:
+            from scipy.stats import linregress
             x = np.arange(n, dtype=float)
             y = np.array([s[1] for s in series])
             slope, _, _, _, _ = linregress(x, y)
-            slope_per_month = float(slope * 20)
+            slope = float(slope * 20)
         except Exception:
             pass
     if n < 10:
         trend = 'gathering_data'
-    elif slope_per_month > 0.1:
+    elif slope > 0.1:
         trend = 'accumulating'
-    elif slope_per_month > 0.03:
+    elif slope > 0.03:
         trend = 'slight_up'
-    elif slope_per_month < -0.1:
+    elif slope < -0.1:
         trend = 'distributing'
-    elif slope_per_month < -0.03:
+    elif slope < -0.03:
         trend = 'slight_down'
     else:
         trend = 'flat'
     return {
         'trend': trend,
-        'latest_ratio': round(latest_ratio, 2),
+        'latest': round(latest, 2),
         'change_30d': change_30d,
-        'data_points': n,
+        'points': n,
     }
 
 
 # ============================================================
-# ★ 시즌2 핵심 - 4차함수 c자리 검출
+# 5. ★ 4차함수 c자리 검출 (시즌2 핵심)
 # ============================================================
 def quartic(x, k, a, b, c):
     return k * (x - a) * (x - b) * (x - c) ** 2
@@ -359,7 +213,7 @@ def fit_quartic(prices, x_norm):
     h = prices - g_base
     best, best_r2 = None, -np.inf
     for a0, b0, c0 in [(0.10, 0.40, 0.80), (0.20, 0.50, 0.85),
-                        (0.05, 0.35, 0.75), (0.15, 0.45, 0.90)]:
+                       (0.05, 0.35, 0.75), (0.15, 0.45, 0.90)]:
         try:
             scale = max(h.max(), 1)
             k0 = scale / max(abs((1 - a0) * (1 - b0) * (1 - c0) ** 2), 1e-6)
@@ -411,12 +265,11 @@ def collect_c_candidates(df, win_sizes, step, recent_cutoff, r2_min=0.55):
 
 
 def find_aligned_c(daily, weekly, monthly):
-    """3프레임 c자리 일치 - ★별점 부여"""
     best = None
     best_score = -np.inf
     def date_diff_months(d1, d2):
         return abs((pd.Timestamp(d1) - pd.Timestamp(d2)).days) / 30
-    # ★5
+    # ★5: 일+주+월
     for d in daily:
         for w in weekly:
             for m in monthly:
@@ -429,15 +282,12 @@ def find_aligned_c(daily, weekly, monthly):
                         best_score = score
                         best = {'stars': 5, 'type': '일+주+월',
                                 'daily': d, 'weekly': w, 'monthly': m}
-    if best:
-        return best
-    # ★4
-    pairs = [
-        ('일+주', daily, weekly, 6, 'daily', 'weekly'),
-        ('주+월', weekly, monthly, 12, 'weekly', 'monthly'),
-        ('일+월', daily, monthly, 12, 'daily', 'monthly'),
-    ]
-    for type_name, fa, fb, max_m, ka, kb in pairs:
+    if best: return best
+    # ★4: 2개 일치
+    pairs = [('일+주', daily, weekly, 6, 'daily', 'weekly'),
+             ('주+월', weekly, monthly, 12, 'weekly', 'monthly'),
+             ('일+월', daily, monthly, 12, 'daily', 'monthly')]
+    for tn, fa, fb, max_m, ka, kb in pairs:
         for a in fa:
             for b in fb:
                 diff = date_diff_months(a['c_date'], b['c_date'])
@@ -445,13 +295,12 @@ def find_aligned_c(daily, weekly, monthly):
                     score = a['r2'] + b['r2'] - diff * 0.02
                     if score > best_score:
                         best_score = score
-                        best = {'stars': 4, 'type': type_name, ka: a, kb: b}
-    if best:
-        return best
-    # ★3
-    singles = [('일', 'daily', d) for d in daily] + \
-              [('주', 'weekly', w) for w in weekly] + \
-              [('월', 'monthly', m) for m in monthly]
+                        best = {'stars': 4, 'type': tn, ka: a, kb: b}
+    if best: return best
+    # ★3: 1개만
+    singles = [('일','daily',d) for d in daily] + \
+              [('주','weekly',w) for w in weekly] + \
+              [('월','monthly',m) for m in monthly]
     if singles:
         singles.sort(key=lambda x: -x[2]['r2'])
         tn, k, d = singles[0]
@@ -459,21 +308,24 @@ def find_aligned_c(daily, weekly, monthly):
     return None
 
 
-def analyze_ma20(df_daily):
-    if df_daily is None or len(df_daily) < 30:
+# ============================================================
+# 6. 20일선 + Phase 분류
+# ============================================================
+def analyze_ma20(df):
+    if df is None or len(df) < 30:
         return {'count': 0, 'is_stealth': False}
-    recent = df_daily.tail(250).copy()
+    recent = df.tail(250).copy()
     recent['ma20'] = recent['종가'].rolling(20).mean()
     recent = recent.dropna()
     if len(recent) < 30:
         return {'count': 0, 'is_stealth': False}
     above = (recent['종가'] > recent['ma20']).astype(int)
     crossings = int((above.diff().abs() == 1).sum())
-    price_range_pct = float((recent['종가'].max() - recent['종가'].min()) / recent['종가'].mean() * 100)
+    pr = float((recent['종가'].max() - recent['종가'].min()) / recent['종가'].mean() * 100)
     return {
         'count': crossings,
-        'is_stealth': bool(crossings >= 4 and price_range_pct <= 35),
-        'price_range_pct': round(price_range_pct, 1),
+        'is_stealth': bool(crossings >= 4 and pr <= 35),
+        'price_range_pct': round(pr, 1),
     }
 
 
@@ -486,28 +338,23 @@ def determine_phase(ratio_pct, ma20_stealth, foreign_trend):
         return 'likely_accumulation'
     if 10 < ratio_pct <= 30 and foreign_trend in ('accumulating', 'slight_up', 'flat', 'gathering_data'):
         return 'early_breakout'
-    if 30 < ratio_pct <= 60:
-        return 'in_progress'
-    if ratio_pct > 60:
-        return 'already_run'
-    if foreign_trend == 'distributing':
-        return 'risky'
-    if ratio_pct < -15:
-        return 'failed'
+    if 30 < ratio_pct <= 60: return 'in_progress'
+    if ratio_pct > 60: return 'already_run'
+    if foreign_trend == 'distributing': return 'risky'
+    if ratio_pct < -15: return 'failed'
     return 'neutral'
 
 
-def verdict_of(phase):
-    return {
-        'stealth_accumulation': '🎯 외인 매집 확정',
-        'quiet_accumulation': '🐢 외인 조용한 매집',
-        'likely_accumulation': '🔍 매집 추정',
-        'early_breakout': '🌱 막 깨고 나옴',
-        'in_progress': '⚪ 진행 중',
-        'already_run': '🔥 이미 폭발',
-        'risky': '⚠️ 외인 매도중',
-        'failed': '❌ 약함',
-    }.get(phase, '평이')
+VERDICTS = {
+    'stealth_accumulation': '🎯 외인 매집 확정',
+    'quiet_accumulation': '🐢 외인 조용한 매집',
+    'likely_accumulation': '🔍 매집 추정',
+    'early_breakout': '🌱 막 깨고 나옴',
+    'in_progress': '⚪ 진행 중',
+    'already_run': '🔥 이미 폭발',
+    'risky': '⚠️ 외인 매도중',
+    'failed': '❌ 약함',
+}
 
 
 def calc_score(stars, phase, ma20_stealth, foreign_trend, is_china):
@@ -518,12 +365,16 @@ def calc_score(stars, phase, ma20_stealth, foreign_trend, is_china):
         'in_progress': 5, 'already_run': -5,
         'risky': -15, 'failed': -20, 'neutral': 0,
     }.get(phase, 0)
-    score += {'accumulating': 20, 'slight_up': 10, 'distributing': -15, 'slight_down': -5}.get(foreign_trend, 0)
+    score += {'accumulating': 20, 'slight_up': 10,
+              'distributing': -15, 'slight_down': -5}.get(foreign_trend, 0)
     if ma20_stealth: score += 10
     if is_china: score += 5
     return int(max(0, min(100, score)))
 
 
+# ============================================================
+# 7. 리샘플 + 차트 추출
+# ============================================================
 def resample_w(df):
     return df.resample('W-FRI').agg({
         '시가': 'first', '고가': 'max', '저가': 'min',
@@ -571,47 +422,41 @@ def to_native(obj):
 
 
 # ============================================================
-# 메인 분석
+# 8. 종목별 분석
 # ============================================================
-def analyze_stock(code, name, kis, foreign_history):
-    # KIS로 일봉 20년 다운로드
-    start_20y = (TODAY - timedelta(days=20 * 365)).strftime('%Y%m%d')
-    df_long = kis.get_daily_ohlc(code, start_20y, TODAY_STR)
-    if df_long is None or len(df_long) < 250:
+def analyze_stock(code, name, mcap, foreign_history):
+    df = get_ohlc(code)
+    if df is None or len(df) < 250:
         return None
-    
-    df_5y = df_long.tail(252 * 5) if len(df_long) >= 252 * 5 else df_long
-    df_w = resample_w(df_long)
-    df_m = resample_m(df_long)
-    if df_w is None or df_m is None or len(df_w) < 100 or len(df_m) < 60:
+    df_w = resample_w(df)
+    df_m = resample_m(df)
+    if df_w is None or df_m is None or len(df_w) < 60 or len(df_m) < 24:
         return None
-    
     # 4차함수 c자리
-    cutoff_d = pd.Timestamp((TODAY - timedelta(days=3 * 365)).date())
-    cutoff_w = pd.Timestamp((TODAY - timedelta(days=4 * 365)).date())
-    cutoff_m = pd.Timestamp((TODAY - timedelta(days=6 * 365)).date())
-    daily_c = collect_c_candidates(df_5y, [800, 1200], 100, cutoff_d)
-    weekly_c = collect_c_candidates(df_w, [200, 300], 15, cutoff_w)
-    monthly_c = collect_c_candidates(df_m, [84, 120], 12, cutoff_m)
+    cutoff_d = pd.Timestamp((TODAY - timedelta(days=3*365)).date())
+    cutoff_w = pd.Timestamp((TODAY - timedelta(days=4*365)).date())
+    cutoff_m = pd.Timestamp((TODAY - timedelta(days=5*365)).date())
+    daily_c = collect_c_candidates(df, [400, 800], 50, cutoff_d)
+    weekly_c = collect_c_candidates(df_w, [100, 180], 10, cutoff_w)
+    monthly_c = collect_c_candidates(df_m, [36, 60], 6, cutoff_m)
     if not (daily_c or weekly_c or monthly_c):
         return None
     alignment = find_aligned_c(daily_c, weekly_c, monthly_c)
     if alignment is None:
         return None
-    
-    # 20일선 + 외인
-    ma20 = analyze_ma20(df_5y)
+    # 20일선
+    ma20 = analyze_ma20(df)
+    # 외인
     foreign = analyze_foreign_trend(foreign_history, code)
-    ratios = [alignment[k]['ratio_pct'] for k in ['daily', 'weekly', 'monthly'] if k in alignment and alignment[k]]
+    ratios = [alignment[k]['ratio_pct'] for k in ['daily','weekly','monthly']
+              if k in alignment and alignment[k]]
     avg_ratio = float(np.mean(ratios)) if ratios else 0.0
-    
     phase = determine_phase(avg_ratio, ma20['is_stealth'], foreign['trend'])
-    verdict = verdict_of(phase)
+    verdict = VERDICTS.get(phase, '평이')
     is_china = code in CHINA_DIRECT
     score = calc_score(alignment['stars'], phase, ma20['is_stealth'], foreign['trend'], is_china)
-    
     return {
-        'code': code, 'name': name,
+        'code': code, 'name': name, 'mcap': mcap,
         'stars': int(alignment['stars']),
         'phase': phase, 'verdict': verdict,
         'accumulation_score': score,
@@ -619,19 +464,19 @@ def analyze_stock(code, name, kis, foreign_history):
         'avg_ratio_pct': round(avg_ratio, 1),
         'signals': {
             'foreign_trend': foreign['trend'],
-            'foreign_latest_ratio': foreign['latest_ratio'],
+            'foreign_latest_ratio': foreign['latest'],
             'foreign_change_30d': foreign['change_30d'],
-            'foreign_data_points': foreign['data_points'],
+            'foreign_data_points': foreign['points'],
             'ma20_crossings': ma20['count'],
             'ma20_stealth': bool(ma20['is_stealth']),
         },
         'chart': {
-            'daily': extract_chart(df_5y, 300),
+            'daily': extract_chart(df, 300),
             'weekly': extract_chart(df_w, 300),
             'monthly': extract_chart(df_m, 300),
         },
         'data_info': {
-            'daily_years': round(len(df_5y) / 252, 1),
+            'daily_years': round(len(df) / 252, 1),
             'weekly_years': round(len(df_w) / 52, 1),
             'monthly_years': round(len(df_m) / 12, 1),
         },
@@ -639,16 +484,15 @@ def analyze_stock(code, name, kis, foreign_history):
 
 
 # ============================================================
-# Gabia FTP 업로드
+# 9. Gabia FTP 업로드
 # ============================================================
 def upload_to_gabia(local_path, remote_name):
     if not all([FTP_HOST, FTP_USER, FTP_PASS]):
-        print('  FTP 환경변수 누락 - 업로드 건너뜀')
+        print('  FTP 환경변수 누락')
         return False
     try:
         ftp = FTP(FTP_HOST, timeout=30)
         ftp.login(FTP_USER, FTP_PASS)
-        # 디렉토리 이동 (없으면 생성)
         for part in FTP_TARGET_DIR.strip('/').split('/'):
             try:
                 ftp.cwd(part)
@@ -661,77 +505,88 @@ def upload_to_gabia(local_path, remote_name):
         print(f'  ✓ FTP 업로드 성공: {FTP_TARGET_DIR}/{remote_name}')
         return True
     except Exception as e:
-        print(f'  ✗ FTP 업로드 실패: {e}')
+        print(f'  ✗ FTP 실패: {e}')
         return False
 
 
 # ============================================================
-# 메인
+# 10. 메인
 # ============================================================
 def main():
-    print(f'[SIGVIEW 잭팟 시즌2 v2.0] {TODAY.strftime("%Y-%m-%d %H:%M:%S")} KST')
-    print(f'종목 풀: {len(UNIVERSE)}개 (코스피200+코스닥150 cyclical)')
-    print(f'데이터 소스: KIS API (OHLC) + NAVER (외인 시계열) + DART (재무)')
+    t0 = time.time()
+    print(f'[SIGVIEW 잭팟 시즌2 v2.2 pykrx] {TODAY.strftime("%Y-%m-%d %H:%M:%S")} KST')
     print()
-    
-    # KIS 클라이언트
-    kis = KISClient(KIS_APP_KEY, KIS_APP_SECRET)
-    
-    # 외인 히스토리 로드
+
+    # 1) 종목 리스트
+    stocks_list = get_top_stocks(MAX_STOCKS)
+    if not stocks_list:
+        print('종목 리스트 실패 - 종료')
+        return
+
+    # 2) 외인 히스토리
     foreign_history = load_foreign_history()
-    print(f'외인 히스토리 로드: {len(foreign_history)}개 종목')
-    
-    # Step 1: 네이버 외인 수집 (5일치 누적)
-    print('\n[Step 1] 외인 보유율 수집 (네이버 5일치)')
+    print(f'\n[2] 외인 히스토리 로드: {len(foreign_history)}개 종목 추적중')
+
+    # 3) 네이버 외인 수집 (병렬화 X - rate limit 위험)
+    print(f'\n[3] 외인 보유율 수집 (네이버, {len(stocks_list)}개)')
     fetch_success = 0
     total_new = 0
-    for code, name in UNIVERSE.items():
-        series = fetch_naver_foreign_series(code)
+    for i, s in enumerate(stocks_list, 1):
+        series = fetch_naver_foreign(s['code'])
         if series:
-            added = update_foreign_history(foreign_history, code, series)
+            added = update_foreign_history(foreign_history, s['code'], series)
             total_new += added
             fetch_success += 1
-        time.sleep(0.2)
+        if i % 50 == 0:
+            print(f'  진행 {i}/{len(stocks_list)} (성공 {fetch_success})')
+        time.sleep(0.05)  # rate limit
     save_foreign_history(foreign_history)
-    print(f'  성공 {fetch_success}/{len(UNIVERSE)}, 신규 누적 {total_new}건')
-    
-    # Step 2: KIS로 OHLC 받고 분석
-    print('\n[Step 2] KIS API로 OHLC + 4차함수 c자리 분석')
+    print(f'  ✓ 성공 {fetch_success}/{len(stocks_list)}, 신규 {total_new}건')
+
+    # 4) OHLC + 4차함수 c자리 분석
+    print(f'\n[4] OHLC + 4차함수 c자리 분석 ({len(stocks_list)}개)')
     print('-' * 60)
     results = []
-    for i, (code, name) in enumerate(UNIVERSE.items(), 1):
+    fail_count = 0
+    for i, s in enumerate(stocks_list, 1):
         try:
-            r = analyze_stock(code, name, kis, foreign_history)
+            r = analyze_stock(s['code'], s['name'], s['mcap'], foreign_history)
             if r:
                 results.append(r)
-                ch = ' 🇨🇳' if r['is_china_play'] else ''
-                if i % 5 == 0 or r['accumulation_score'] >= 50:
-                    print(f'  [{i}/{len(UNIVERSE)}] {name}{ch} ★{r["stars"]} '
-                          f'점수{r["accumulation_score"]} {r["verdict"]}')
-            time.sleep(0.3)  # KIS rate limit
+                if r['accumulation_score'] >= 50 or r['stars'] >= 5:
+                    ch = ' 🇨🇳' if r['is_china_play'] else ''
+                    print(f'  [{i}/{len(stocks_list)}] {s["name"]}{ch} ★{r["stars"]} '
+                          f'{r["accumulation_score"]}점 {r["verdict"]}')
+            else:
+                fail_count += 1
+            if i % 50 == 0:
+                elapsed = time.time() - t0
+                print(f'  ... 진행 {i}/{len(stocks_list)} (매칭 {len(results)}, 실패 {fail_count}, {elapsed:.0f}초)')
         except Exception as e:
-            print(f'  [{i}/{len(UNIVERSE)}] {name} - 에러: {str(e)[:80]}')
-    
+            fail_count += 1
+            if i % 50 == 0:
+                print(f'  [{i}/{len(stocks_list)}] {s["name"]} 에러: {str(e)[:60]}')
+
     # 정렬
     results.sort(key=lambda x: -x['accumulation_score'])
     for i, r in enumerate(results, 1):
         r['rank'] = i
-    
-    # JSON 출력
+
+    # 5) JSON 저장
     output = {
-        'version': '2.0', 'season': 2, 'algo_version': '2.0',
+        'version': '2.2', 'season': 2, 'algo_version': '2.2',
         'generated_at': TODAY.isoformat(),
-        'n_scanned': len(UNIVERSE),
+        'n_scanned': len(stocks_list),
         'n_matched': len(results),
         'foreign_data': {
-            'source': 'NAVER 5d cumulative + KIS realtime',
+            'source': 'NAVER 5d cumulative',
             'total_codes_tracked': len(foreign_history),
             'fetch_success_today': fetch_success,
             'new_records_today': total_new,
         },
         'algorithm': {
-            'name': 'SIGVIEW 시즌2 v2.0',
-            'description': '4차함수 c자리 자동 검출 + 외인 매집 추세 + 20일선 패턴',
+            'name': 'SIGVIEW 시즌2 v2.2 (pykrx)',
+            'description': '4차함수 c자리 자동 검출 + 외인 매집 + 20일선',
         },
         'summary': {
             'five_stars': sum(1 for r in results if r['stars'] == 5),
@@ -747,18 +602,19 @@ def main():
         'disclaimer': '4차함수 c자리 패턴 + 외인 보유율 분석. 투자 권유 X.',
     }
     output = to_native(output)
-    
-    # 로컬 저장
     with open('jackpot-v2.json', 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
-    print(f'\n저장: jackpot-v2.json ({len(results)}/{len(UNIVERSE)}개)')
-    
-    # Gabia FTP 업로드
-    print('\n[Step 3] Gabia FTP 업로드')
+
+    elapsed = time.time() - t0
+    print(f'\n저장: jackpot-v2.json ({len(results)}/{len(stocks_list)}개)')
+    print(f'총 소요 시간: {elapsed:.0f}초 ({elapsed/60:.1f}분)')
+
+    # 6) Gabia FTP 업로드
+    print('\n[5] Gabia FTP 업로드')
     upload_to_gabia('jackpot-v2.json', 'jackpot-v2.json')
     if os.path.exists('foreign-history-v2.json'):
         upload_to_gabia('foreign-history-v2.json', 'foreign-history-v2.json')
-    
+
     print(f'\n✅ 완료 - siglab.kr/tools-jackpot-v2/ 에서 확인')
 
 
