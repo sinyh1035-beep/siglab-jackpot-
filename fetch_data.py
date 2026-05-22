@@ -1,23 +1,14 @@
 """
-SIGVIEW 잭팟 시즌1 v4.2 — 단기 매매 도구 (간결!!)
-==============================================
-형 그림 그대로:
-"20일선 밀리고 하락, 주가 눌리고, 전체 추세 상향/횡보,
- 볼밴 하단 지지 or 아랫꼬리 양봉, CMF 상승"
+SIGVIEW 잭팟 시즌1 v4.2 — 단기 매매 도구
+========================================
+형 요구사항:
+✅ 매수 자리만 찾기 (보유/매도/손절 X)
+✅ 조건 4가지: 추세 상향/횡보 + 20일선 눌림 + 볼밴하단/망치 + CMF 상승
+✅ 시즌1 차트 100% 호환 (기존 jackpot.html 그대로 사용)
+✅ 단순!!
 
-= 매수 자리 찾기 1개!! (보유종목/매도임박 다 제거)
-
-조건 (4개 다 만족):
-✅ 전체 추세 상향/횡보 (60일 -20% 이상 X, 120일선 -15% 이내)
-✅ 20일선 아래로 눌림 (-10% ~ +2%)
-✅ 볼밴 하단 (35% 이하) OR 아랫꼬리 양봉
-✅ CMF 음→양 전환 OR 상승 중
-
-검증 결과:
-✅ LG이노텍: 폭등 직전 자리 검출
-✅ 비츠로셀: 폭등 직전 자리 검출
-✅ 두산에너빌리티: +58% 자리 (80점)
-✅ HD현대중공업: +30% 자리 (85점)
+매일 새벽 06:30 KST 자동 실행
+종목: 500개 (5천억+)
 """
 
 import json
@@ -101,9 +92,6 @@ def fetch_prices(stocks):
     return all_data
 
 
-# ============================================================
-# 기술적 지표
-# ============================================================
 def calc_cmf(df, period=21):
     high, low, close, vol = df['High'], df['Low'], df['Close'], df['Volume']
     hl_diff = (high - low).replace(0, 1e-9)
@@ -113,7 +101,6 @@ def calc_cmf(df, period=21):
 
 
 def is_hammer(o, h, l, c):
-    """아랫꼬리 양봉"""
     if c <= o:
         return False
     body = c - o
@@ -122,19 +109,8 @@ def is_hammer(o, h, l, c):
     return body > 0 and lower > body * 1.0 and upper < body * 0.8
 
 
-# ============================================================
-# ★★★ v4.2 핵심: 매수 자리 검출
-# ============================================================
 def check_buy_signal(df):
-    """
-    형 그림 그대로 매수 자리 검출
-    
-    4가지 조건 다 만족:
-    1. 전체 추세 상향/횡보
-    2. 20일선 아래로 눌림
-    3. 볼밴 하단 OR 망치
-    4. CMF 상승
-    """
+    """매수 자리 검출 (4가지 조건 다 만족)"""
     if len(df) < 120:
         return None
     
@@ -154,28 +130,21 @@ def check_buy_signal(df):
     if pd.isna(ma20.iloc[i]) or pd.isna(cmf.iloc[i]) or pd.isna(ma120.iloc[i]):
         return None
     
-    # ============================================
     # 조건 1: 전체 추세 상향/횡보
-    # ============================================
     diff_ma120 = (c - ma120.iloc[i]) / ma120.iloc[i] * 100
     if diff_ma120 < -15:
-        return None  # 120일선 -15% 이하 = 하락 추세
-    
+        return None
     past_60d = df['Close'].iloc[max(0, i-60)]
     change_60d = (c - past_60d) / past_60d * 100
     if change_60d < -20:
-        return None  # 60일간 -20% 이상 = 하락 추세
+        return None
     
-    # ============================================
-    # 조건 2: 20일선 눌림 (-10% ~ +2%)
-    # ============================================
+    # 조건 2: 20일선 눌림
     diff_ma20 = (c - ma20.iloc[i]) / ma20.iloc[i] * 100
     if not (-10 <= diff_ma20 <= 2):
         return None
     
-    # ============================================
-    # 조건 3: 볼밴 하단 OR 아랫꼬리 양봉
-    # ============================================
+    # 조건 3: 볼밴 하단 OR 망치
     bb_low_now = bb_lower.iloc[i]
     bb_up_now = bb_upper.iloc[i]
     bb_position = 50
@@ -184,7 +153,6 @@ def check_buy_signal(df):
         bb_position = max(0, min(100, bb_position))
     
     near_bb_low = bb_position <= 35
-    
     has_hammer = False
     for j in range(max(0, i-3), i+1):
         if is_hammer(df['Open'].iloc[j], df['High'].iloc[j],
@@ -193,35 +161,27 @@ def check_buy_signal(df):
             break
     
     if not (near_bb_low or has_hammer):
-        return None  # 둘 다 X = 매수 자리 X
+        return None
     
-    # ============================================
-    # 조건 4: CMF 음→양 전환 OR 상승 중
-    # ============================================
+    # 조건 4: CMF 음→양 OR 상승
     cmf_now = cmf.iloc[i]
     cmf_5d_ago = cmf.iloc[max(0, i-5)]
-    
     cmf_turning = False
     cmf_rising = False
-    
     cmf_lookback = cmf.iloc[max(0, i-7):i+1].dropna()
     if len(cmf_lookback) >= 3:
         if cmf_lookback.iloc[-1] > 0 and (cmf_lookback.iloc[:-1] < 0).any():
             cmf_turning = True
-    
     if not pd.isna(cmf_5d_ago):
         if cmf_now - cmf_5d_ago > 0.1:
             cmf_rising = True
     
     if not (cmf_turning or cmf_rising):
-        return None  # CMF 정체 = 매수 자리 X
+        return None
     
-    # ============================================
-    # 점수 계산 (참고용)
-    # ============================================
-    score = 30  # 4가지 조건 통과 기본 점수
+    # 점수
+    score = 30
     events = []
-    
     if cmf_turning:
         score += 25
         events.append('CMF전환')
@@ -243,15 +203,6 @@ def check_buy_signal(df):
         score += 10
         events.append('거래량')
     
-    # 20일선 횡단 (참고)
-    recent_60 = df['Close'].iloc[max(0, i-60):i+1]
-    ma20_60 = ma20.iloc[max(0, i-60):i+1]
-    crossings = 0
-    if len(recent_60) == len(ma20_60):
-        above = (recent_60.values > ma20_60.values).astype(int)
-        if len(above) > 1:
-            crossings = int(np.sum(np.abs(np.diff(above))))
-    
     return {
         'price': float(c),
         'cmf': float(cmf_now),
@@ -269,16 +220,50 @@ def check_buy_signal(df):
         'has_hammer': has_hammer,
         'near_bb_low': near_bb_low,
         'vol_ratio': round(vol_ratio, 2),
-        'ma20_crossings_60d': crossings,
         'score': score,
         'events': events,
     }
 
 
-# ============================================================
-# 시즌1 기존 차트 데이터 형식 (v3.7.2 호환)
-# ============================================================
+# 시즌1 v3.7.2 호환: 3차함수 단계
+def cubic_stage_v37(prices):
+    n = len(prices)
+    if n < 30:
+        return '?'
+    xs = np.linspace(0, 1, n)
+    try:
+        a, b, c, d = np.polyfit(xs, prices, 3)
+        slope = 3*a + 2*b + c
+        curv = 6*a + 2*b
+        disc = b*b - 3*a*c
+        l_min, l_max = None, None
+        if disc >= 0 and a != 0:
+            sq = np.sqrt(disc)
+            p1 = (-b-sq)/(3*a); p2 = (-b+sq)/(3*a)
+            if a > 0: l_max, l_min = p1, p2
+            else: l_min, l_max = p1, p2
+        if l_min is not None and -0.1 < l_min < 1:
+            dist = 1 - l_min
+            if l_max is not None and 1 < l_max < 1.5:
+                ratio = dist / (l_max - l_min)
+                if ratio < 0.20: return '1단계'
+                elif ratio < 0.50: return '2단계'
+                elif ratio < 0.80: return '2단계후'
+                else: return '3단계'
+            else:
+                if dist < 0.20 and curv > 0: return '1단계'
+                elif curv > 0: return '2단계'
+                else: return '3단계'
+        elif slope < 0 and curv > 0: return '바닥형성'
+        elif slope < 0: return '하락'
+        elif slope > 0 and curv > 0: return '가속'
+        else: return '감속'
+    except Exception:
+        return '?'
+
+
 def extract_chart_data_v37(closes, vols, dates):
+    """시즌1 v3.7.2 차트 형식 그대로!"""
     df = pd.DataFrame({'c': closes, 'v': vols}, index=pd.to_datetime(dates))
     
     d_chart = closes[-252:] if len(closes) >= 252 else closes
@@ -311,20 +296,40 @@ def analyze_stock(code, info):
     try:
         sig = check_buy_signal(df)
         if not sig:
-            return None  # 매수 자리 X = 결과에 X
+            return None
         
         chart = extract_chart_data_v37(info['closes'], info['vols'], info['dates'])
+        closes = info['closes']
+        
+        d_stage = cubic_stage_v37(closes[-120:] if len(closes) >= 120 else closes)
+        df_ts = pd.DataFrame({'c': closes}, index=pd.to_datetime(info['dates']))
+        w_closes = df_ts.resample('W').last().dropna()['c'].tolist()
+        m_closes = df_ts.resample('ME').last().dropna()['c'].tolist()
+        w_stage = cubic_stage_v37(w_closes[-80:] if len(w_closes) >= 80 else w_closes)
+        m_stage = cubic_stage_v37(m_closes)
         
         return {
             'code': code,
-            # 시즌1 v3.7.2 형식
+            # 시즌1 v3.7.2 차트 호환
             'n': info['name'],
             'm': info['market'],
             'mc': round(info['mcap'] / 1e8),
             'p': sig['price'],
-            'h': int(max(info['closes'])),
-            'l': int(min(info['closes'])),
-            # v4.2 신호 분석
+            't': sig['score'],
+            'j': sig['score'],
+            'h': int(max(closes)),
+            'l': int(min(closes)),
+            'psr_mult': 1.0, 'accum_mult': 1.0, 'macro_mult': 1.0,
+            'golden_mult': 1.0, 'ta_mult': 1.0,
+            'd': {'g': sig['score'], 'st': d_stage},
+            'w': {'g': sig['score'], 'st': w_stage},
+            'mo': {'g': sig['score'], 'st': m_stage},
+            **chart,
+            'psr': None, 'roe': None, 'opm': None, 'fr': None,
+            'stock_3y': 0, 'kospi_3y': 0, 'macro_gap': 0,
+            'ta': 50, 'is_turnaround': False,
+            'golden_2001': False, 'golden_multi': None,
+            # v4.2 추가
             'name': info['name'],
             'market': info['market'],
             'mcap': int(info['mcap'] / 1e8),
@@ -347,8 +352,6 @@ def analyze_stock(code, info):
             'has_hammer': sig['has_hammer'],
             'near_bb_low': sig['near_bb_low'],
             'vol_ratio': sig['vol_ratio'],
-            'ma20_crossings_60d': sig['ma20_crossings_60d'],
-            **chart,
         }
     except Exception:
         return None
@@ -376,13 +379,13 @@ def analyze_all_parallel(price_data):
                 r = f.result()
                 if r:
                     results.append(r)
-                    log(f"  [{completed}/{len(items)}] 🎯 {r['name']} {r['score']}점 (60일{r['change_60d']:+.1f}%, 20일선{r['diff_ma20']:+.1f}%, {','.join(r['events'])})")
+                    log(f"  [{completed}] 🎯 {r['name']} {r['score']}점 (60일{r['change_60d']:+.1f}%, 20일선{r['diff_ma20']:+.1f}%, {','.join(r['events'])})")
                 if completed % 100 == 0:
-                    log(f"  ... {completed}/{len(items)} (매수 자리 {len(results)}개, {time.time()-t0:.0f}초)")
+                    log(f"  ... {completed}/{len(items)} (매수자리 {len(results)}개, {time.time()-t0:.0f}초)")
             except Exception:
                 pass
     
-    log(f"  → {len(results)}개 매수 자리 발견 ({time.time()-t0:.0f}초)")
+    log(f"  → {len(results)}개 매수 자리 ({time.time()-t0:.0f}초)")
     return results
 
 
@@ -401,7 +404,7 @@ def upload_to_gabia():
         with open(OUTPUT_FILE, 'rb') as f:
             ftp.storbinary(f'STOR {OUTPUT_FILE}', f)
         ftp.quit()
-        log(f"  ✓ FTP 업로드: {FTP_TARGET_DIR}/{OUTPUT_FILE}")
+        log(f"  ✓ FTP: {FTP_TARGET_DIR}/{OUTPUT_FILE}")
         return True
     except Exception as e:
         log(f"  ✗ FTP 실패: {e}")
@@ -426,8 +429,8 @@ def to_native(obj):
 def main():
     t0 = time.time()
     log("=" * 70)
-    log("SIGVIEW 잭팟 시즌1 v4.2 - 매수 자리 찾기 (간결!)")
-    log("형 그림: 20일선 눌림 + 볼밴하단/망치 + CMF상승 + 추세 상향/횡보")
+    log("SIGVIEW 잭팟 시즌1 v4.2 - 매수 자리 검출 (단순!)")
+    log("조건: 추세 상향/횡보 + 20일선 눌림 + 볼밴하단/망치 + CMF 상승")
     log("=" * 70)
     
     stocks = get_stock_list()
@@ -443,8 +446,7 @@ def main():
     for i, r in enumerate(results, 1):
         r['rank'] = i
     
-    log(f"\n[결과 요약]")
-    log(f"  🟢 매수 자리: {len(results)}개")
+    log(f"\n[결과] 🟢 매수 자리: {len(results)}개")
     
     data_dict = {r['code']: r for r in results}
     
@@ -458,26 +460,12 @@ def main():
         'n_scanned': len(price_data),
         'n_signals': len(results),
         'algorithm': {
-            'name': 'SIGVIEW 시즌1 v4.2 (매수 자리 검출)',
+            'name': 'SIGVIEW 시즌1 v4.2 (매수 자리)',
             'description': '20일선 눌림 + 볼밴하단/망치 + CMF상승 + 추세 상향/횡보',
-            'philosophy': '진짜 매수 자리만! 보유종목/매도임박 X',
-            'conditions': [
-                '1. 전체 추세 상향/횡보 (120일선 -15% 이내, 60일 -20% 이내)',
-                '2. 20일선 눌림 (-10% ~ +2%)',
-                '3. 볼밴 하단 (35% 이하) OR 아랫꼬리 양봉',
-                '4. CMF 음→양 전환 OR 상승 (5일간 +0.1 이상)',
-            ],
-        },
-        'parameters': {
-            'cmf_period': 21,
-            'ma_periods': [20, 60, 120],
-            'bb_period': 20,
-            'bb_std': 2,
-            'mcap_threshold': THRESHOLD,
         },
         'stocks': results,
         'data': data_dict,
-        'disclaimer': 'v4.2 진짜 매수 자리만 검출. 형 그림 그대로.',
+        'disclaimer': 'v4.2 매수 자리만 검출.',
     }
     output = to_native(output)
     
@@ -485,12 +473,9 @@ def main():
         json.dump(output, f, ensure_ascii=False, indent=2)
     
     elapsed = time.time() - t0
-    log(f"\n저장: {OUTPUT_FILE}")
-    log(f"시간: {elapsed:.0f}초 ({elapsed/60:.1f}분)")
-    
+    log(f"\n저장: {OUTPUT_FILE} ({elapsed:.0f}초)")
     log("\nStep 4: FTP 업로드")
     upload_to_gabia()
-    
     log(f"\n✅ 완료!")
 
 
