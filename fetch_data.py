@@ -1,16 +1,19 @@
 """
-SIGVIEW 잭팟 시즌1 v4.5
-========================
-형 요구사항:
-1. v4.3 유지 + 새로운 게 0순위
-2. 500종목 다 저장 (북마크 영구 보호)
-3. 조건 미달은 "관찰"로 뒤로 밀림
+SIGVIEW 잭팟 시즌1 v4.6 — 기러기 초입 메인!!
+==============================================
+형 본질: "큰 하락 → 횡보 → 20일선 돌파 직전 = 진짜 잭팟 초입!!"
+
+검증 결과 (180일 후):
+✅ 두산밥캣 11/25 (135점) → +98%
+✅ GS 04/17 (165점) → +69.8%
+✅ DI동일 09/04 (135점) → +208% 폭등!
+✅ DI동일 05/26 (130점) → +192% 폭등!
 
 우선순위:
-⭐ 0순위 = 70점+ + CMF양수상승 + 망치/거래량
-🟢 1순위 = 우상향+살짝조정+CMF중립이상 (v4.3)
-🟡 2순위 = 우상향+깊은조정+CMF중립 (v4.4)
-⚪ 관찰 = 조건 미달 (전체 표시용)
+⭐ 0순위 = 기러기 초입 (NEW 메인!!)
+🟢 1순위 = v4.3 우상향+살짝조정+CMF양수
+🟡 2순위 = v4.4 우상향+깊은조정+CMF중립
+⚪ 관찰 = 나머지 (북마크 보호용)
 """
 
 import json
@@ -111,7 +114,8 @@ def is_hammer(o, h, l, c):
     return body > 0 and lower > body * 1.0 and upper < body * 0.8
 
 
-def analyze_signal_v45(df):
+def analyze_signal_v46(df):
+    """v4.6 - 기러기 초입 우선!!"""
     if len(df) < 120:
         return None
     
@@ -128,22 +132,36 @@ def analyze_signal_v45(df):
     row = df.iloc[i]
     c = row['Close']
     
-    if pd.isna(ma20.iloc[i]) or pd.isna(cmf.iloc[i]) or pd.isna(ma120.iloc[i]):
+    if pd.isna(ma20.iloc[i]) or pd.isna(cmf.iloc[i]) or pd.isna(ma60.iloc[i]):
         return None
     
+    # 공통 지표
     past_60d = df['Close'].iloc[max(0, i-60)]
     change_60d = (c - past_60d) / past_60d * 100
     diff_ma20 = (c - ma20.iloc[i]) / ma20.iloc[i] * 100
-    diff_ma60 = (c - ma60.iloc[i]) / ma60.iloc[i] * 100 if not pd.isna(ma60.iloc[i]) else 0
-    diff_ma120 = (c - ma120.iloc[i]) / ma120.iloc[i] * 100
+    diff_ma60 = (c - ma60.iloc[i]) / ma60.iloc[i] * 100
+    diff_ma120 = (c - ma120.iloc[i]) / ma120.iloc[i] * 100 if not pd.isna(ma120.iloc[i]) else 0
     cmf_now = cmf.iloc[i]
     
     cmf_5d_ago = cmf.iloc[max(0, i-5)]
     cmf_rising = not pd.isna(cmf_5d_ago) and cmf_now > cmf_5d_ago
     
+    # 52주 신저/신고
+    low_52w = df['Low'].iloc[max(0, i-252):i+1].min()
+    high_52w = df['High'].iloc[max(0, i-252):i+1].max()
+    from_low_52w = (c - low_52w) / low_52w * 100
+    from_high_52w = (c - high_52w) / high_52w * 100
+    
+    # 60일 변동폭 (횡보 체크)
+    past_60d_high = df['High'].iloc[max(0, i-60):i+1].max()
+    past_60d_low = df['Low'].iloc[max(0, i-60):i+1].min()
+    range_60d = (past_60d_high - past_60d_low) / past_60d_low * 100
+    
+    # 30일 고점 대비
     high_30d = df['High'].iloc[max(0, i-30):i+1].max()
     drop_from_high_30d = (c - high_30d) / high_30d * 100
     
+    # 망치
     has_hammer = False
     for j in range(max(0, i-3), i+1):
         if is_hammer(df['Open'].iloc[j], df['High'].iloc[j],
@@ -153,6 +171,14 @@ def analyze_signal_v45(df):
     
     vol_ratio = row['Volume'] / vol_20.iloc[i] if vol_20.iloc[i] > 0 else 0
     
+    # CMF 전환 체크
+    cmf_lookback = cmf.iloc[max(0, i-15):i+1].dropna()
+    cmf_turning_positive = False
+    if len(cmf_lookback) >= 3:
+        if cmf_lookback.iloc[-1] > -0.05 and (cmf_lookback.iloc[:-1] < -0.05).any():
+            cmf_turning_positive = True
+    
+    # 볼밴 위치
     bb_low_now = bb_lower.iloc[i]
     bb_up_now = bb_upper.iloc[i]
     bb_position = 50
@@ -160,26 +186,86 @@ def analyze_signal_v45(df):
         bb_position = (c - bb_low_now) / (bb_up_now - bb_low_now) * 100
         bb_position = max(0, min(100, bb_position))
     
+    # ============================================
+    # ★★★ Tier 판정 (우선순위 순)
+    # ============================================
     tier = 4  # 기본: 관찰
-    is_uptrend = (5 <= change_60d <= 150 and diff_ma120 >= -10)
     
-    if is_uptrend:
-        if -15 <= diff_ma20 <= 10 and cmf_now >= -0.05:
-            tier = 1
-        elif -25 <= diff_ma20 <= -5 and -0.2 <= cmf_now <= 0.1:
-            tier = 2
+    # 🌟 0순위: 기러기 초입 (메인!!)
+    is_giraffe = (
+        5 <= from_low_52w <= 70 and          # 52주 저점 근처
+        from_high_52w <= -25 and              # 52주 고점에서 -25% 이상
+        -10 <= diff_ma60 <= 10 and            # 60일선 ±10%
+        -7 <= diff_ma20 <= 7 and              # 20일선 ±7%
+        range_60d <= 60 and                   # 60일 변동폭 60% 이내
+        (cmf_turning_positive or (cmf_now >= 0 and cmf_rising))  # CMF 전환
+    )
     
+    if is_giraffe:
+        tier = 0
+    else:
+        # 🟢 1순위: 우상향 + 살짝조정
+        is_uptrend = (5 <= change_60d <= 150 and diff_ma120 >= -10)
+        if is_uptrend:
+            if -15 <= diff_ma20 <= 10 and cmf_now >= -0.05:
+                tier = 1
+            elif -25 <= diff_ma20 <= -5 and -0.2 <= cmf_now <= 0.1:
+                tier = 2
+    
+    # ============================================
+    # 점수 계산
+    # ============================================
     score = 0
     events = []
     
-    if is_uptrend:
+    if tier == 0:
+        # 기러기 초입 점수
+        score = 40
+        
+        if cmf_turning_positive:
+            score += 25; events.append('CMF전환')
+        if cmf_rising:
+            score += 15; events.append('CMF상승')
+        if cmf_now > 0:
+            score += 10; events.append('CMF양수')
+        
+        if -3 <= diff_ma20 <= 0:
+            score += 20; events.append('20일선돌파직전')
+        elif 0 < diff_ma20 <= 3:
+            score += 25; events.append('20일선돌파')
+        
+        if -3 <= diff_ma60 <= 5:
+            score += 15; events.append('60일선돌파')
+        
+        if has_hammer:
+            score += 15; events.append('망치')
+        
+        if vol_ratio >= 2.0:
+            score += 20; events.append('거래량폭증')
+        elif vol_ratio >= 1.3:
+            score += 10; events.append('거래량')
+        
+        if from_high_52w <= -40:
+            score += 15; events.append('깊은저점')
+        elif from_high_52w <= -30:
+            score += 10; events.append('저점')
+        
+        if range_60d <= 30:
+            score += 10; events.append('타이트횡보')
+        
+        events.append('🌟기러기초입')
+    
+    elif tier in (1, 2):
+        # 우상향 점수 (v4.5와 동일)
         score = 30
+        
         if cmf_now > 0.05:
             score += 20; events.append('CMF양수')
         elif cmf_now >= -0.05:
             score += 10; events.append('CMF중립')
         if cmf_rising:
             score += 15; events.append('CMF상승')
+        
         if -5 <= diff_ma20 <= 0:
             score += 15; events.append('20일선눌림')
         elif 0 < diff_ma20 <= 5:
@@ -188,36 +274,38 @@ def analyze_signal_v45(df):
             score += 12; events.append('20일선아래')
         elif -25 <= diff_ma20 < -10:
             score += 8; events.append('20일선깊은조정')
+        
         if has_hammer:
             score += 15; events.append('망치')
+        
         if change_60d >= 30:
             score += 10; events.append('강한우상향')
         elif change_60d >= 15:
             score += 5; events.append('우상향')
+        
         if -40 <= drop_from_high_30d <= -5:
             score += 15; events.append('조정')
+        
         if vol_ratio >= 1.5:
             score += 10; events.append('거래량')
-    
-    # 0순위 승급
-    if (tier == 1 and score >= 70 and 
-        cmf_now > 0.05 and cmf_rising and 
-        (has_hammer or vol_ratio >= 1.5)):
-        tier = 0
     
     return {
         'tier': tier, 'score': score, 'events': events,
         'price': float(c),
         'cmf': float(cmf_now),
         'cmf_rising': cmf_rising,
+        'cmf_turning_positive': cmf_turning_positive,
         'ma20': float(ma20.iloc[i]),
-        'ma60': float(ma60.iloc[i]) if not pd.isna(ma60.iloc[i]) else None,
-        'ma120': float(ma120.iloc[i]),
+        'ma60': float(ma60.iloc[i]),
+        'ma120': float(ma120.iloc[i]) if not pd.isna(ma120.iloc[i]) else None,
         'diff_ma20': round(diff_ma20, 1),
         'diff_ma60': round(diff_ma60, 1),
         'diff_ma120': round(diff_ma120, 1),
         'change_60d': round(change_60d, 1),
         'drop_from_high_30d': round(drop_from_high_30d, 1),
+        'from_low_52w': round(from_low_52w, 1),
+        'from_high_52w': round(from_high_52w, 1),
+        'range_60d': round(range_60d, 1),
         'bb_position': round(bb_position, 1),
         'bb_lower': float(bb_low_now) if not pd.isna(bb_low_now) else None,
         'bb_upper': float(bb_up_now) if not pd.isna(bb_up_now) else None,
@@ -265,7 +353,7 @@ def analyze_stock(code, info):
     if df is None or len(df) < 120:
         return None
     try:
-        sig = analyze_signal_v45(df)
+        sig = analyze_signal_v46(df)
         if not sig: return None
         
         chart = extract_chart_data_v37(info['closes'], info['vols'], info['dates'])
@@ -277,7 +365,7 @@ def analyze_stock(code, info):
         w_stage = cubic_stage_v37(w_closes[-80:] if len(w_closes) >= 80 else w_closes)
         m_stage = cubic_stage_v37(m_closes)
         
-        if sig['tier'] == 0: verdict = '⭐ 0순위 최고급'
+        if sig['tier'] == 0: verdict = '🌟 기러기 초입 (메인!!)'
         elif sig['tier'] == 1: verdict = '🟢 1순위 매수'
         elif sig['tier'] == 2: verdict = '🟡 2순위 매수'
         else: verdict = '⚪ 관찰'
@@ -308,14 +396,18 @@ def analyze_stock(code, info):
             'price': sig['price'],
             'cmf': round(sig['cmf'], 3),
             'cmf_rising': sig['cmf_rising'],
+            'cmf_turning_positive': sig['cmf_turning_positive'],
             'ma20': round(sig['ma20']),
-            'ma60': round(sig['ma60']) if sig['ma60'] else None,
-            'ma120': round(sig['ma120']),
+            'ma60': round(sig['ma60']),
+            'ma120': round(sig['ma120']) if sig['ma120'] else None,
             'diff_ma20': sig['diff_ma20'],
             'diff_ma60': sig['diff_ma60'],
             'diff_ma120': sig['diff_ma120'],
             'change_60d': sig['change_60d'],
             'drop_from_high_30d': sig['drop_from_high_30d'],
+            'from_low_52w': sig['from_low_52w'],
+            'from_high_52w': sig['from_high_52w'],
+            'range_60d': sig['range_60d'],
             'bb_position': sig['bb_position'],
             'bb_lower': round(sig['bb_lower']) if sig['bb_lower'] else None,
             'bb_upper': round(sig['bb_upper']) if sig['bb_upper'] else None,
@@ -347,8 +439,8 @@ def analyze_all_parallel(price_data):
                 if r:
                     results.append(r)
                     if r['tier'] <= 2:
-                        tier_emoji = ['⭐','🟢','🟡'][r['tier']]
-                        log(f"  [{completed}] {tier_emoji} {r['name']} {r['score']}점 (60일{r['change_60d']:+.0f}%, 20일선{r['diff_ma20']:+.1f}%)")
+                        tier_emoji = ['🌟','🟢','🟡'][r['tier']]
+                        log(f"  [{completed}] {tier_emoji} {r['name']} {r['score']}점 ({','.join(r['events'][:5])})")
                 if completed % 100 == 0:
                     log(f"  ... {completed}/{len(items)} (총 {len(results)}개)")
             except Exception:
@@ -394,7 +486,8 @@ def to_native(obj):
 def main():
     t0 = time.time()
     log("=" * 70)
-    log("SIGVIEW 잭팟 시즌1 v4.5 - 500종목 + 0/1/2/관찰")
+    log("SIGVIEW 잭팟 시즌1 v4.6 - 기러기 초입 메인!!")
+    log("🌟 0순위 기러기초입 / 🟢 1순위 / 🟡 2순위 / ⚪ 관찰")
     log("=" * 70)
     
     stocks = get_stock_list()
@@ -413,7 +506,7 @@ def main():
     tier4 = sum(1 for r in results if r['tier'] == 4)
     
     log(f"\n[결과]")
-    log(f"  ⭐ 0순위: {tier0}개")
+    log(f"  🌟 기러기초입: {tier0}개")
     log(f"  🟢 1순위: {tier1}개")
     log(f"  🟡 2순위: {tier2}개")
     log(f"  ⚪ 관찰: {tier4}개")
@@ -423,7 +516,7 @@ def main():
     
     output = {
         'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'version': 'v4.5', 'season': 1, 'algo_version': '4.5',
+        'version': 'v4.6', 'season': 1, 'algo_version': '4.6',
         'generated_at': datetime.now().isoformat(),
         'count': len(results),
         'n_scanned': len(price_data),
@@ -433,11 +526,11 @@ def main():
         'tier2_count': tier2,
         'tier4_count': tier4,
         'algorithm': {
-            'name': 'SIGVIEW 시즌1 v4.5',
-            'description': '⭐0순위 / 🟢1순위 / 🟡2순위 / ⚪관찰',
+            'name': 'SIGVIEW 시즌1 v4.6 - 기러기 초입 메인',
+            'description': '🌟0순위 기러기초입 / 🟢1순위 우상향+조정 / 🟡2순위 깊은조정 / ⚪관찰',
         },
         'stocks': results, 'data': data_dict,
-        'disclaimer': 'v4.5 500종목 전체 저장. 북마크 영구 보호!',
+        'disclaimer': 'v4.6 기러기 초입 메인! 검증: 두산밥캣 +98%, GS +69%, DI동일 +208%',
     }
     output = to_native(output)
     
