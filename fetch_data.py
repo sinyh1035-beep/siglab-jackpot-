@@ -1,19 +1,20 @@
 """
-SIGVIEW 잭팟 시즌1 v4.6 — 기러기 초입 메인!!
+SIGVIEW 잭팟 시즌1 v4.7 — 기러기 초입 + 추세 체크!!
 ==============================================
-형 본질: "큰 하락 → 횡보 → 20일선 돌파 직전 = 진짜 잭팟 초입!!"
+v4.6 → v4.7 추가:
+✅ 60일선이 -5% 이상 떨어진 종목 제외 (우하향 X)
+✅ 120일선이 -10% 이상 떨어진 종목 제외 (장기 우하향 X)
+✅ 60일선 < 120일선 -10% (역배열) 제외
 
-검증 결과 (180일 후):
-✅ 두산밥캣 11/25 (135점) → +98%
-✅ GS 04/17 (165점) → +69.8%
-✅ DI동일 09/04 (135점) → +208% 폭등!
-✅ DI동일 05/26 (130점) → +192% 폭등!
+검증:
+✅ GKL 같은 우하향 종목 제외 OK!
+✅ 두산밥캣, DI동일 (동그라미 시점) 잡힘 OK!
 
 우선순위:
-⭐ 0순위 = 기러기 초입 (NEW 메인!!)
+⭐ 0순위 = 기러기 초입 (추세 살아있는 + 횡보 + CMF 전환)
 🟢 1순위 = v4.3 우상향+살짝조정+CMF양수
 🟡 2순위 = v4.4 우상향+깊은조정+CMF중립
-⚪ 관찰 = 나머지 (북마크 보호용)
+⚪ 관찰 = 나머지
 """
 
 import json
@@ -157,6 +158,22 @@ def analyze_signal_v46(df):
     past_60d_low = df['Low'].iloc[max(0, i-60):i+1].min()
     range_60d = (past_60d_high - past_60d_low) / past_60d_low * 100
     
+    # ★★★ NEW v4.7: 추세 체크 (우하향 종목 제외)
+    # 60일선 추세 (60일 전 60일선 vs 현재)
+    ma60_change = 0
+    if i >= 60 and not pd.isna(ma60.iloc[i-60]) and ma60.iloc[i-60] > 0:
+        ma60_change = (ma60.iloc[i] - ma60.iloc[i-60]) / ma60.iloc[i-60] * 100
+    
+    # 120일선 추세 (60일 전 120일선 vs 현재)
+    ma120_change = 0
+    if i >= 60 and not pd.isna(ma120.iloc[i-60]) and ma120.iloc[i-60] > 0:
+        ma120_change = (ma120.iloc[i] - ma120.iloc[i-60]) / ma120.iloc[i-60] * 100
+    
+    # 60일선 vs 120일선 (정배열 체크)
+    ma60_vs_ma120 = 0
+    if not pd.isna(ma120.iloc[i]) and ma120.iloc[i] > 0:
+        ma60_vs_ma120 = (ma60.iloc[i] - ma120.iloc[i]) / ma120.iloc[i] * 100
+    
     # 30일 고점 대비
     high_30d = df['High'].iloc[max(0, i-30):i+1].max()
     drop_from_high_30d = (c - high_30d) / high_30d * 100
@@ -191,13 +208,16 @@ def analyze_signal_v46(df):
     # ============================================
     tier = 4  # 기본: 관찰
     
-    # 🌟 0순위: 기러기 초입 (메인!!)
+    # 🌟 0순위: 기러기 초입 (메인!! + 추세 체크 v4.7)
     is_giraffe = (
         5 <= from_low_52w <= 70 and          # 52주 저점 근처
         from_high_52w <= -25 and              # 52주 고점에서 -25% 이상
         -10 <= diff_ma60 <= 10 and            # 60일선 ±10%
         -7 <= diff_ma20 <= 7 and              # 20일선 ±7%
         range_60d <= 60 and                   # 60일 변동폭 60% 이내
+        ma60_change >= -5 and                 # ★ NEW: 60일선 우하향 X
+        ma120_change >= -10 and               # ★ NEW: 120일선 장기 우하향 X
+        ma60_vs_ma120 >= -10 and              # ★ NEW: 역배열 X
         (cmf_turning_positive or (cmf_now >= 0 and cmf_rising))  # CMF 전환
     )
     
@@ -301,6 +321,9 @@ def analyze_signal_v46(df):
         'diff_ma20': round(diff_ma20, 1),
         'diff_ma60': round(diff_ma60, 1),
         'diff_ma120': round(diff_ma120, 1),
+        'ma60_change': round(ma60_change, 1),
+        'ma120_change': round(ma120_change, 1),
+        'ma60_vs_ma120': round(ma60_vs_ma120, 1),
         'change_60d': round(change_60d, 1),
         'drop_from_high_30d': round(drop_from_high_30d, 1),
         'from_low_52w': round(from_low_52w, 1),
@@ -403,6 +426,9 @@ def analyze_stock(code, info):
             'diff_ma20': sig['diff_ma20'],
             'diff_ma60': sig['diff_ma60'],
             'diff_ma120': sig['diff_ma120'],
+            'ma60_change': sig['ma60_change'],
+            'ma120_change': sig['ma120_change'],
+            'ma60_vs_ma120': sig['ma60_vs_ma120'],
             'change_60d': sig['change_60d'],
             'drop_from_high_30d': sig['drop_from_high_30d'],
             'from_low_52w': sig['from_low_52w'],
@@ -486,8 +512,8 @@ def to_native(obj):
 def main():
     t0 = time.time()
     log("=" * 70)
-    log("SIGVIEW 잭팟 시즌1 v4.6 - 기러기 초입 메인!!")
-    log("🌟 0순위 기러기초입 / 🟢 1순위 / 🟡 2순위 / ⚪ 관찰")
+    log("SIGVIEW 잭팟 시즌1 v4.7 - 기러기 초입 + 추세 체크!!")
+    log("🌟 0순위 기러기초입 (우상향 추세만) / 🟢 1순위 / 🟡 2순위 / ⚪ 관찰")
     log("=" * 70)
     
     stocks = get_stock_list()
@@ -516,7 +542,7 @@ def main():
     
     output = {
         'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'version': 'v4.6', 'season': 1, 'algo_version': '4.6',
+        'version': 'v4.7', 'season': 1, 'algo_version': '4.7',
         'generated_at': datetime.now().isoformat(),
         'count': len(results),
         'n_scanned': len(price_data),
@@ -526,11 +552,11 @@ def main():
         'tier2_count': tier2,
         'tier4_count': tier4,
         'algorithm': {
-            'name': 'SIGVIEW 시즌1 v4.6 - 기러기 초입 메인',
-            'description': '🌟0순위 기러기초입 / 🟢1순위 우상향+조정 / 🟡2순위 깊은조정 / ⚪관찰',
+            'name': 'SIGVIEW 시즌1 v4.7 - 기러기 초입 + 추세 체크',
+            'description': '🌟0순위 기러기(추세살아있음+횡보+CMF전환) / 🟢1순위 / 🟡2순위 / ⚪관찰',
         },
         'stocks': results, 'data': data_dict,
-        'disclaimer': 'v4.6 기러기 초입 메인! 검증: 두산밥캣 +98%, GS +69%, DI동일 +208%',
+        'disclaimer': 'v4.7 추세 체크 추가! GKL 같은 우하향 종목 제외!',
     }
     output = to_native(output)
     
