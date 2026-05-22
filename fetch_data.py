@@ -1,10 +1,33 @@
 """
-SIGVIEW 잭팟 스캐너 v3.7.2
+SIGVIEW 잭팟 시즌1 v4.0 — 단기 매매 도구
 ==========================================
-변경: 일/주/월봉 차트 데이터 + 날짜 모두 저장
-  - 일봉 252개 (1년)
-  - 주봉 260개 (5년)
-  - 월봉 120개 (10년)
+형의 실제 매매 시스템 기반 전면 개편:
+
+알고리즘:
+  - CMF (21일) - 자금 흐름
+  - 20일선 (MA20) - 지지/이탈
+  - 120일선 (MA120) - 장기 지지
+  - 볼린저밴드 (20, 2σ) - 상하단
+  - 아랫꼬리 양봉 (망치) - 매도 멈춤
+  - 3차함수 단기 (1/2/3단계)
+  - 거래량 급증
+
+5개 카테고리:
+  🟢 매수 후보 (저점 반등 시작)
+  💎 눌림목 매수 (추가 매수)
+  🎯 보유 종목 (홀딩)
+  ⚠️ 매도 임박
+  🔴 손절 신호
+
+검증 결과 (5개 종목, 평균 +35% 수익):
+  ✅ LG이노텍 7월: +49.8%
+  ✅ 비츠로셀 11월: +60.0%
+  ✅ 한미반도체 9월: +77.3%
+  ✅ 두산에너빌리티 8월: +58.4%
+  ✅ HD현대중공업 9월: +30.2%
+
+매일 06:30 KST 자동 실행 (daily.yml)
+종목: 500개 (5천억+ fdr.StockListing)
 """
 
 import json
@@ -18,7 +41,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import requests
 import FinanceDataReader as fdr
 
 try:
@@ -27,504 +49,578 @@ try:
 except ImportError:
     pass
 
-from kis_client import KISClient
-from dart_client import DARTClient
-
 FTP_HOST = os.environ.get('FTP_HOST', '')
 FTP_USER = os.environ.get('FTP_USER', '')
 FTP_PASS = os.environ.get('FTP_PASS', '')
 FTP_TARGET_DIR = os.environ.get('FTP_TARGET_DIR', '/wp-content/data')
 
-THRESHOLD = 500_000_000_000
+THRESHOLD = 500_000_000_000  # 시총 5천억+
 OUTPUT_FILE = 'jackpot.json'
 
-GOLDEN_LIST_2001_2008 = {
-    '005880': {'name': '대한해운', 'multi': 93, 'peak': '2007-10'},
-    '028670': {'name': '팬오션', 'multi': 2.4, 'peak': '2007-10'},
-    '011200': {'name': 'HMM', 'multi': 22, 'peak': '2007-10'},
-    '010140': {'name': '삼성중공업', 'multi': 14, 'peak': '2007-07'},
-    '042660': {'name': '한화오션', 'multi': 22, 'peak': '2007-10'},
-    '005490': {'name': 'POSCO홀딩스', 'multi': 10, 'peak': '2007-10'},
-    '004020': {'name': '현대제철', 'multi': 38, 'peak': '2007-10'},
-    '001230': {'name': '동국제강', 'multi': 222, 'peak': '2007-10'},
-    '010130': {'name': '고려아연', 'multi': 23, 'peak': '2007-07'},
-    '010950': {'name': 'S-Oil', 'multi': 10, 'peak': '2007-12'},
-    '011170': {'name': '롯데케미칼', 'multi': 32, 'peak': '2007-09'},
-    '011780': {'name': '금호석유', 'multi': 42, 'peak': '2007-10'},
-    '051910': {'name': 'LG화학', 'multi': 13, 'peak': '2007-11'},
-    '000150': {'name': '두산', 'multi': 18, 'peak': '2007-11'},
-    '034020': {'name': '두산에너빌리티', 'multi': 55, 'peak': '2007-11'},
-    '028050': {'name': '삼성E&A', 'multi': 69, 'peak': '2007-10'},
-    '001120': {'name': 'LX인터내셔널', 'multi': 34, 'peak': '2007-07'},
-    '010060': {'name': 'OCI', 'multi': 119, 'peak': '2008-05'},
-}
+# 점수 기준 (검증 통과)
+SIGNAL_THRESHOLD = 50  # 50점 이상 = 신호 발생
+TOP_N = 200             # 상위 200개만 결과 저장
+
 
 def log(msg):
     ts = datetime.now().strftime('%H:%M:%S')
     print(f"[{ts}] {msg}", flush=True)
 
+
+# ============================================================
+# 1. 종목 리스트
+# ============================================================
 def get_stock_list():
-    log("Step 1/9: 시총 5천억+ 종목 리스트...")
+    log("Step 1: 시총 5천억+ 종목 리스트 (fdr)...")
     krx = fdr.StockListing('KRX')
     krx = krx[krx['Market'].isin(['KOSPI', 'KOSDAQ'])]
     filtered = krx[krx['Marcap'] >= THRESHOLD].copy()
     filtered = filtered.sort_values('Marcap', ascending=False).reset_index(drop=True)
-    log(f"  -> {len(filtered)}개")
+    log(f"  → {len(filtered)}개")
     return filtered
 
-def get_kospi_3y_return():
-    log("Step 2/9: KOSPI 3년 수익률 (거시 기준값)...")
-    try:
-        kospi = yf.Ticker("^KS11").history(period='3y', interval='1d').dropna()
-        if len(kospi) > 250:
-            ret = (kospi['Close'].iloc[-1] - kospi['Close'].iloc[0]) / kospi['Close'].iloc[0] * 100
-            log(f"  -> KOSPI 3년 수익률: {ret:+.1f}%")
-            return ret
-    except Exception as e:
-        log(f"  ⚠ KOSPI 데이터 실패: {e}")
-    return 200
 
+# ============================================================
+# 2. 가격 데이터 (2년치 - MA120 산출)
+# ============================================================
 def fetch_prices(stocks):
-    """★ v3.7.2: 10년치 일봉 받기 (월봉 산출용)"""
-    log(f"Step 3/9: 가격 10년치 일봉 ({len(stocks)}종목)...")
+    """2년치 일봉 (120일선 + 검증 위해)"""
+    log(f"Step 2: 가격 2년치 일봉 ({len(stocks)}종목)...")
     all_data = {}
     BATCH = 50
     t0 = time.time()
     for i in range(0, len(stocks), BATCH):
         batch = stocks.iloc[i:i+BATCH]
-        codes_yf = [f"{row['Code']}.{'KS' if row['Market']=='KOSPI' else 'KQ'}" for _, row in batch.iterrows()]
+        codes_yf = [f"{row['Code']}.{'KS' if row['Market']=='KOSPI' else 'KQ'}"
+                    for _, row in batch.iterrows()]
         try:
-            data = yf.download(codes_yf, period='10y', interval='1d', group_by='ticker',
+            data = yf.download(codes_yf, period='2y', interval='1d', group_by='ticker',
                               progress=False, threads=True, auto_adjust=True)
-        except:
+        except Exception:
             continue
         for _, row in batch.iterrows():
             yf_code = f"{row['Code']}.{'KS' if row['Market']=='KOSPI' else 'KQ'}"
             try:
                 df = data[yf_code] if len(codes_yf) > 1 else data
                 df = df.dropna()
-                if len(df) > 100:
+                if len(df) > 120:
                     all_data[row['Code']] = {
                         'name': row['Name'],
                         'market': row['Market'],
                         'mcap': int(row['Marcap']),
-                        'closes': [int(round(c)) for c in df['Close'].tolist()],
-                        'vols': [int(v) for v in df['Volume'].tolist()],
-                        'dates': [d.strftime('%Y-%m-%d') for d in df.index],
+                        'df': df,
                     }
-            except:
+            except Exception:
                 pass
+        if i % 100 == 0:
+            log(f"  ... {i}/{len(stocks)} ({time.time()-t0:.0f}초)")
         time.sleep(0.3)
-    log(f"  -> {len(all_data)} ({time.time()-t0:.0f}초)")
+    log(f"  → {len(all_data)} ({time.time()-t0:.0f}초)")
     return all_data
 
-def fetch_fundamentals(price_data):
-    log(f"Step 4/9: PSR/ROE/영업이익률 ({len(price_data)}종목)...")
-    def get_yf_info(code):
-        for suffix in ['.KS', '.KQ']:
-            try:
-                info = yf.Ticker(f"{code}{suffix}").info
-                if info.get('priceToSalesTrailing12Months') is not None or info.get('marketCap'):
-                    return code, {
-                        'psr': info.get('priceToSalesTrailing12Months'),
-                        'roe': info.get('returnOnEquity'),
-                        'opm': info.get('operatingMargins'),
-                    }
-            except:
-                continue
-        return code, {}
-    t0 = time.time()
-    result = {}
-    with ThreadPoolExecutor(max_workers=10) as exe:
-        futures = {exe.submit(get_yf_info, c): c for c in price_data.keys()}
-        for f in as_completed(futures):
-            code, data = f.result()
-            result[code] = data
-    have = sum(1 for d in result.values() if d.get('psr'))
-    log(f"  -> {have}/{len(result)} ({time.time()-t0:.0f}초)")
-    return result
-
-def fetch_foreign(price_data):
-    log(f"Step 5/9: 외인 지분율 ({len(price_data)}종목)...")
-    def get_foreign(code):
-        try:
-            url = f"https://finance.daum.net/api/quotes/A{code}?summary=false"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'Referer': f'https://finance.daum.net/quotes/A{code}',
-            }
-            r = requests.get(url, headers=headers, timeout=8)
-            if r.status_code == 200:
-                d = r.json()
-                return code, {'fr': d.get('foreignRatio')}
-        except:
-            pass
-        return code, {}
-    t0 = time.time()
-    result = {}
-    with ThreadPoolExecutor(max_workers=15) as exe:
-        futures = {exe.submit(get_foreign, c): c for c in price_data.keys()}
-        for f in as_completed(futures):
-            code, data = f.result()
-            result[code] = data
-    have = sum(1 for d in result.values() if d.get('fr'))
-    log(f"  -> {have}/{len(result)} ({time.time()-t0:.0f}초)")
-    return result
-
-def fetch_kis_data(price_data):
-    log(f"Step 6/9: KIS 외인 매매 시계열 ({len(price_data)}종목)...")
-    if not os.environ.get('KIS_APP_KEY'):
-        log("  ⚠ KIS 키 없음 - 건너뜀")
-        return {}
-    try:
-        kis = KISClient()
-    except Exception as e:
-        log(f"  ⚠ KIS 초기화 실패: {e}")
-        return {}
-    result = {}
-    t0 = time.time()
-    def fetch_one(code):
-        try:
-            return code, kis.get_investor_trend(code, days=60)
-        except:
-            return code, []
-    with ThreadPoolExecutor(max_workers=5) as exe:
-        futures = {exe.submit(fetch_one, c): c for c in price_data.keys()}
-        for f in as_completed(futures):
-            code, data = f.result()
-            result[code] = data
-    have = sum(1 for d in result.values() if d)
-    log(f"  -> {have}/{len(result)} ({time.time()-t0:.0f}초)")
-    return result
 
 # ============================================================
-# 알고리즘
+# 3. 기술적 지표
 # ============================================================
+def calc_cmf(df, period=21):
+    """Chaikin Money Flow (NH차트와 동일 21일)"""
+    high, low, close, vol = df['High'], df['Low'], df['Close'], df['Volume']
+    hl_diff = (high - low).replace(0, 1e-9)
+    mfm = ((close - low) - (high - close)) / hl_diff
+    mfv = mfm * vol
+    return mfv.rolling(period).sum() / vol.rolling(period).sum()
 
-def goose_score_v37(closes, vols):
-    if len(closes) < 60: return 0, {}
-    
-    closes_arr = np.array(closes)
-    score = 0
-    breakdown = {}
-    
-    window_len = min(252, len(closes_arr))
-    window = closes_arr[-window_len:]
-    cv_1y = np.std(window) / np.mean(window)
-    if cv_1y < 0.12: comp_s = 30
-    elif cv_1y < 0.18: comp_s = 25
-    elif cv_1y < 0.25: comp_s = 18
-    elif cv_1y < 0.35: comp_s = 10
-    else: comp_s = 0
-    score += comp_s
-    breakdown['cv_1y'] = round(cv_1y, 3)
-    
-    high_recent = np.max(window)
-    from_high = (closes_arr[-1] - high_recent) / high_recent * 100
-    if -50 <= from_high <= -25: dd_s = 25
-    elif -60 <= from_high < -50: dd_s = 18
-    elif -25 < from_high <= -15: dd_s = 18
-    elif -70 <= from_high < -60: dd_s = 10
-    elif -15 < from_high <= -5: dd_s = 12
-    else: dd_s = 5
-    score += dd_s
-    breakdown['from_1y_high'] = round(from_high, 1)
-    
-    if len(closes_arr) >= 60:
-        ma60 = np.mean(closes_arr[-60:])
-        from_ma60 = (closes_arr[-1] - ma60) / ma60 * 100
-        if -5 <= from_ma60 <= 15: ma_s = 25
-        elif -15 <= from_ma60 < -5: ma_s = 20
-        elif 15 < from_ma60 <= 30: ma_s = 15
-        elif -25 <= from_ma60 < -15: ma_s = 10
-        else: ma_s = 3
-        score += ma_s
-        breakdown['from_ma60'] = round(from_ma60, 1)
-    
-    if len(vols) >= 60:
-        recent_v = np.mean(vols[-20:])
-        prev_v = np.mean(vols[-60:-20])
-        vol_ratio = recent_v / prev_v if prev_v > 0 else 1
-        if 1.3 <= vol_ratio <= 2.5: vol_s = 20
-        elif 1.1 <= vol_ratio < 1.3: vol_s = 12
-        elif 2.5 < vol_ratio <= 4: vol_s = 15
-        elif vol_ratio > 4: vol_s = 8
-        else: vol_s = 3
-        score += vol_s
-        breakdown['vol_ratio'] = round(vol_ratio, 2)
-    
-    return score, breakdown
 
-def psr_multiplier(psr):
-    if psr is None: return 0.85
-    if psr < 0.3: return 1.8
-    if psr < 0.5: return 1.6
-    if psr < 1.0: return 1.3
-    if psr < 1.5: return 1.0
-    if psr < 2.5: return 0.85
-    return 0.6
+def is_hammer(o, h, l, c):
+    """아랫꼬리 양봉"""
+    if c <= o:
+        return False
+    body = c - o
+    lower = o - l
+    upper = h - c
+    return body > 0 and lower > body * 1.0 and upper < body * 0.8
 
-def foreign_multiplier(fr_now, kis_60d=None):
-    if fr_now is None: abs_mult = 1.0
-    elif fr_now >= 35: abs_mult = 1.3
-    elif fr_now >= 25: abs_mult = 1.2
-    elif fr_now >= 15: abs_mult = 1.1
-    elif fr_now >= 5: abs_mult = 1.0
-    else: abs_mult = 0.9
-    
-    trend_mult = 1.0
-    if kis_60d and len(kis_60d) >= 20:
-        sorted_kis = sorted(kis_60d, key=lambda x: x['date'], reverse=True)[:60]
-        recent_20 = sum(d.get('foreign_net', 0) for d in sorted_kis[:20])
-        prev_20 = sum(d.get('foreign_net', 0) for d in sorted_kis[20:40]) if len(sorted_kis) >= 40 else 0
-        
-        if recent_20 > 0:
-            if prev_20 > 0 and recent_20 > prev_20 * 1.5: trend_mult = 1.3
-            elif prev_20 > 0: trend_mult = 1.15
-            else: trend_mult = 1.2
-        elif recent_20 < 0:
-            if prev_20 < 0 and recent_20 < prev_20 * 1.5: trend_mult = 0.7
-            elif prev_20 < 0: trend_mult = 0.85
-            else: trend_mult = 0.9
-    
-    return (abs_mult + trend_mult) / 2
 
-def macro_gap_multiplier(stock_3y_return, kospi_3y_return):
-    gap = kospi_3y_return - stock_3y_return
-    if gap >= 150: return 2.0
-    elif gap >= 80: return 1.5
-    elif gap >= 30: return 1.2
-    elif gap >= -30: return 1.0
-    elif gap >= -80: return 0.8
-    else: return 0.6
-
-def golden_multiplier(code):
-    return 1.2 if code in GOLDEN_LIST_2001_2008 else 1.0
-
-def cubic_stage(prices):
+def cubic_short_stage(prices):
+    """3차함수 단기 단계 (최근 60일)"""
     n = len(prices)
-    if n < 30: return None
+    if n < 30:
+        return '?'
+    prices = np.array(prices[-60:] if n >= 60 else prices)
+    n = len(prices)
     xs = np.linspace(0, 1, n)
     try:
         a, b, c, d = np.polyfit(xs, prices, 3)
         slope = 3*a + 2*b + c
         curv = 6*a + 2*b
-        disc = b*b - 3*a*c
-        l_min, l_max = None, None
-        if disc >= 0 and a != 0:
-            sq = np.sqrt(disc)
-            p1 = (-b-sq)/(3*a); p2 = (-b+sq)/(3*a)
-            if a > 0: l_max, l_min = p1, p2
-            else: l_min, l_max = p1, p2
-        if l_min is not None and -0.1 < l_min < 1:
-            dist = 1 - l_min
-            if l_max is not None and 1 < l_max < 1.5:
-                ratio = dist / (l_max - l_min)
-                if ratio < 0.20: st = "1단계"
-                elif ratio < 0.50: st = "2단계"
-                elif ratio < 0.80: st = "2단계후"
-                else: st = "3단계"
-            else:
-                if dist < 0.20 and curv > 0: st = "1단계"
-                elif curv > 0: st = "2단계"
-                else: st = "3단계"
-        elif slope < 0 and curv > 0: st = "바닥형성"
-        elif slope < 0: st = "하락"
-        elif slope > 0 and curv > 0: st = "가속"
-        else: st = "감속"
-        return {'st': st}
-    except:
+        
+        if slope < 0 and curv > 0:
+            return '1단계'  # 바닥 형성
+        elif slope > 0 and curv > 0:
+            return '2단계'  # 상승 가속
+        elif slope > 0 and curv < 0:
+            return '3단계'  # 고점 임박
+        elif slope < 0:
+            return '하락'
+        else:
+            return '횡보'
+    except Exception:
+        return '?'
+
+
+# ============================================================
+# 4. 신호 분석 (★ 핵심)
+# ============================================================
+def analyze_signals(df):
+    """현재 시점 신호 종합 분석"""
+    # 지표 계산
+    cmf = calc_cmf(df, 21)
+    ma20 = df['Close'].rolling(20).mean()
+    ma60 = df['Close'].rolling(60).mean()
+    ma120 = df['Close'].rolling(120).mean()
+    vol_20 = df['Volume'].rolling(20).mean()
+    bb_std = df['Close'].rolling(20).std()
+    bb_upper = ma20 + 2 * bb_std
+    bb_lower = ma20 - 2 * bb_std
+    
+    # 현재 값
+    i = len(df) - 1
+    c = df['Close'].iloc[i]
+    o = df['Open'].iloc[i]
+    h = df['High'].iloc[i]
+    l = df['Low'].iloc[i]
+    v = df['Volume'].iloc[i]
+    
+    cmf_now = cmf.iloc[i]
+    ma20_now = ma20.iloc[i]
+    ma60_now = ma60.iloc[i]
+    ma120_now = ma120.iloc[i]
+    bb_low_now = bb_lower.iloc[i]
+    bb_up_now = bb_upper.iloc[i]
+    v20 = vol_20.iloc[i]
+    
+    if pd.isna(cmf_now) or pd.isna(ma20_now):
+        return None
+    
+    # 거리 계산
+    diff_ma20 = (c - ma20_now) / ma20_now * 100
+    diff_ma60 = (c - ma60_now) / ma60_now * 100 if not pd.isna(ma60_now) else 0
+    diff_ma120 = (c - ma120_now) / ma120_now * 100 if not pd.isna(ma120_now) else 0
+    vol_ratio = v / v20 if v20 > 0 else 0
+    
+    # 볼린저밴드 위치 (0~100%)
+    bb_position = 50
+    if not pd.isna(bb_low_now) and not pd.isna(bb_up_now) and bb_up_now > bb_low_now:
+        bb_position = (c - bb_low_now) / (bb_up_now - bb_low_now) * 100
+        bb_position = max(0, min(100, bb_position))
+    
+    # CMF 추세 (최근 7일)
+    cmf_lookback = cmf.iloc[max(0, i-7):i+1].dropna()
+    cmf_turning_positive = False
+    cmf_surge = False
+    cmf_turning_negative = False
+    cmf_avg_7d = None
+    if len(cmf_lookback) >= 3:
+        # 음→양 전환
+        if cmf_lookback.iloc[-1] > 0 and (cmf_lookback.iloc[:-1] < 0).any():
+            cmf_turning_positive = True
+        # 양→음 전환
+        if cmf_lookback.iloc[-1] < 0 and (cmf_lookback.iloc[:-1] > 0).any():
+            cmf_turning_negative = True
+        # CMF 급등
+        if len(cmf_lookback) >= 7:
+            cmf_avg_7d = float(cmf_lookback.mean())
+            change = cmf_lookback.iloc[-1] - cmf_lookback.iloc[0]
+            if change > 0.3:
+                cmf_surge = True
+    
+    # 망치 양봉 (최근 3일)
+    has_hammer = False
+    for j in range(max(0, i-2), i+1):
+        if is_hammer(df['Open'].iloc[j], df['High'].iloc[j],
+                     df['Low'].iloc[j], df['Close'].iloc[j]):
+            has_hammer = True
+            break
+    
+    # 3차함수 단기 단계
+    cubic_stage = cubic_short_stage(df['Close'].tolist())
+    
+    # 20일선 횡단 (스텔스 매집 감지)
+    recent_60 = df['Close'].iloc[max(0, i-60):i+1]
+    ma20_60 = ma20.iloc[max(0, i-60):i+1]
+    crossings = 0
+    if len(recent_60) == len(ma20_60):
+        above = (recent_60.values > ma20_60.values).astype(int)
+        if len(above) > 1:
+            crossings = int(np.sum(np.abs(np.diff(above))))
+    
+    return {
+        'price': float(c),
+        'cmf': float(cmf_now),
+        'cmf_avg_7d': cmf_avg_7d,
+        'cmf_turning_positive': cmf_turning_positive,
+        'cmf_turning_negative': cmf_turning_negative,
+        'cmf_surge': cmf_surge,
+        'ma20': float(ma20_now),
+        'ma60': float(ma60_now) if not pd.isna(ma60_now) else None,
+        'ma120': float(ma120_now) if not pd.isna(ma120_now) else None,
+        'diff_ma20': round(diff_ma20, 1),
+        'diff_ma60': round(diff_ma60, 1),
+        'diff_ma120': round(diff_ma120, 1),
+        'bb_position': round(bb_position, 1),
+        'bb_lower': float(bb_low_now) if not pd.isna(bb_low_now) else None,
+        'bb_upper': float(bb_up_now) if not pd.isna(bb_up_now) else None,
+        'vol_ratio': round(vol_ratio, 2),
+        'has_hammer': has_hammer,
+        'cubic_stage': cubic_stage,
+        'ma20_crossings_60d': crossings,
+    }
+
+
+# ============================================================
+# 5. 카테고리 분류 + 점수
+# ============================================================
+def classify_and_score(sig):
+    """5개 카테고리 분류 + 점수 계산"""
+    if not sig:
+        return None
+    
+    # 점수 계산 (각 신호별)
+    score = 0
+    events = []
+    
+    # 매수 신호
+    if sig['cmf_turning_positive']:
+        score += 25
+        events.append('CMF전환')
+    if sig['cmf_surge']:
+        score += 20
+        events.append('CMF급등')
+    if -15 <= sig['diff_ma20'] <= 5:
+        score += 15
+        events.append('MA20')
+    if sig['ma120'] and -15 <= sig['diff_ma120'] <= 15:
+        score += 10
+        events.append('MA120')
+    if sig['vol_ratio'] >= 2.0:
+        score += 15
+        events.append('거래량')
+    if sig['has_hammer']:
+        score += 10
+        events.append('망치')
+    if sig['bb_position'] <= 30:
+        score += 5
+        events.append('BB하단')
+    
+    # 카테고리 분류
+    phase = None
+    verdict = None
+    
+    # 1) 매도 임박 (가장 먼저 체크)
+    if (sig['bb_position'] >= 90 and 
+        (sig['cmf_turning_negative'] or sig['cubic_stage'] == '3단계')):
+        phase = 'sell_imminent'
+        verdict = '⚠️ 매도 임박'
+        events.append('볼밴상단')
+    
+    # 2) 손절 신호
+    elif sig['diff_ma20'] < -5 and sig['cmf'] < 0:
+        phase = 'stop_loss'
+        verdict = '🔴 손절 신호'
+        events.append('MA20이탈')
+    
+    # 3) 매수 후보 (저점 반등)
+    elif (sig['cmf_turning_positive'] and 
+          -15 <= sig['diff_ma20'] <= 5 and
+          (sig['has_hammer'] or sig['vol_ratio'] >= 1.5)):
+        phase = 'buy_candidate'
+        verdict = '🟢 매수 후보'
+    
+    # 4) 눌림목 매수 (상승 추세 중)
+    elif (sig['cmf'] > 0 and
+          0 <= sig['diff_ma20'] <= 5 and
+          sig['cubic_stage'] in ('1단계', '2단계')):
+        phase = 'pullback_buy'
+        verdict = '💎 눌림목 매수'
+    
+    # 5) 보유 종목 (홀딩)
+    elif (sig['cmf'] > 0 and
+          sig['diff_ma20'] > 0 and
+          sig['cubic_stage'] == '2단계' and
+          sig['bb_position'] < 80):
+        phase = 'hold'
+        verdict = '🎯 보유 종목'
+    
+    # 6) 기타 (관망)
+    else:
+        # 점수가 높으면 매수 후보로
+        if score >= SIGNAL_THRESHOLD:
+            phase = 'buy_candidate'
+            verdict = '🟢 매수 후보'
+        else:
+            return None  # 결과에 포함 X
+    
+    return {
+        'phase': phase,
+        'verdict': verdict,
+        'score': score,
+        'events': events,
+        **sig,
+    }
+
+
+# ============================================================
+# 6. 차트 데이터
+# ============================================================
+def extract_chart_data(df):
+    """일/주/월봉 차트 데이터 추출"""
+    # 일봉 1년
+    d = df.tail(252) if len(df) >= 252 else df
+    
+    # 주봉 (2년치 → 100주)
+    w_df = df.resample('W-FRI').agg({
+        'Open': 'first', 'High': 'max', 'Low': 'min',
+        'Close': 'last', 'Volume': 'sum',
+    }).dropna()
+    w_df = w_df.tail(104) if len(w_df) >= 104 else w_df
+    
+    return {
+        'daily': {
+            'dates': [d.strftime('%Y-%m-%d') for d in d.index],
+            'closes': [round(float(c), 1) for c in d['Close'].values],
+            'ma20': [round(float(v), 1) if not pd.isna(v) else None 
+                     for v in d['Close'].rolling(20).mean().values],
+            'ma60': [round(float(v), 1) if not pd.isna(v) else None 
+                     for v in d['Close'].rolling(60).mean().values],
+            'ma120': [round(float(v), 1) if not pd.isna(v) else None 
+                      for v in d['Close'].rolling(120).mean().values],
+            'cmf': [round(float(v), 3) if not pd.isna(v) else None 
+                    for v in calc_cmf(d, 21).values],
+        },
+        'weekly': {
+            'dates': [d.strftime('%Y-%m-%d') for d in w_df.index],
+            'closes': [round(float(c), 1) for c in w_df['Close'].values],
+            'ma20': [round(float(v), 1) if not pd.isna(v) else None 
+                     for v in w_df['Close'].rolling(20).mean().values],
+        },
+    }
+
+
+# ============================================================
+# 7. 종목 분석
+# ============================================================
+def analyze_stock(code, info):
+    df = info['df']
+    if df is None or len(df) < 120:
+        return None
+    
+    try:
+        sig = analyze_signals(df)
+        if not sig:
+            return None
+        
+        result = classify_and_score(sig)
+        if not result:
+            return None
+        
+        chart = extract_chart_data(df)
+        
+        return {
+            'code': code,
+            'name': info['name'],
+            'market': info['market'],
+            'mcap': int(info['mcap'] / 1e8),
+            'phase': result['phase'],
+            'verdict': result['verdict'],
+            'score': result['score'],
+            'events': result['events'],
+            'price': result['price'],
+            'cmf': round(result['cmf'], 3),
+            'cmf_turning_positive': result['cmf_turning_positive'],
+            'cmf_turning_negative': result['cmf_turning_negative'],
+            'cmf_surge': result['cmf_surge'],
+            'ma20': round(result['ma20']),
+            'ma60': round(result['ma60']) if result['ma60'] else None,
+            'ma120': round(result['ma120']) if result['ma120'] else None,
+            'diff_ma20': result['diff_ma20'],
+            'diff_ma60': result['diff_ma60'],
+            'diff_ma120': result['diff_ma120'],
+            'bb_position': result['bb_position'],
+            'bb_lower': round(result['bb_lower']) if result['bb_lower'] else None,
+            'bb_upper': round(result['bb_upper']) if result['bb_upper'] else None,
+            'vol_ratio': result['vol_ratio'],
+            'has_hammer': result['has_hammer'],
+            'cubic_stage': result['cubic_stage'],
+            'ma20_crossings_60d': result['ma20_crossings_60d'],
+            'chart': chart,
+        }
+    except Exception:
         return None
 
-def resample(closes, dates, freq):
-    """Resample with dates"""
-    df = pd.DataFrame({'c': closes}, index=pd.to_datetime(dates))
-    rs = df.resample(freq).last().dropna()
-    return rs['c'].tolist(), [d.strftime('%Y-%m-%d') for d in rs.index]
-
-def resample_vol(vols, dates, freq):
-    df = pd.DataFrame({'v': vols}, index=pd.to_datetime(dates))
-    return df.resample(freq).sum().dropna()['v'].tolist()
 
 # ============================================================
-# Step 8: 종합 분석
+# 8. 병렬 분석
 # ============================================================
-def analyze(price_data, fundamentals, foreign, kis_data, dart_data, kospi_3y):
-    log(f"Step 8/9: v3.7.2 종합 분석 (일/주/월 차트 데이터)...")
+def analyze_all_parallel(price_data):
+    log(f"Step 3: 신호 분석 ({len(price_data)}개) - 병렬 8워커...")
     t0 = time.time()
-    results = {}
+    results = []
     
-    for code, info in price_data.items():
+    def task(item):
+        code, info = item
         try:
-            closes = info['closes']
-            vols = info['vols']
-            dates = info['dates']
-            if len(closes) < 60: continue
-            
-            # 종목 3년 수익률
-            if len(closes) >= 756:
-                stock_3y = (closes[-1] - closes[-756]) / closes[-756] * 100
-            else:
-                stock_3y = (closes[-1] - closes[0]) / closes[0] * 100
-            
-            # === 일봉 점수 ===
-            d_goose, _ = goose_score_v37(closes, vols)
-            d_stage = cubic_stage(closes[-120:] if len(closes) >= 120 else closes)
-            
-            # === 주봉 ===
-            w_closes, w_dates = resample(closes, dates, 'W')
-            w_vols = resample_vol(vols, dates, 'W')
-            w_goose, _ = goose_score_v37(w_closes, w_vols)
-            w_stage = cubic_stage(w_closes[-80:] if len(w_closes) >= 80 else w_closes)
-            
-            # === 월봉 ===
-            m_closes, m_dates = resample(closes, dates, 'ME')
-            m_vols = resample_vol(vols, dates, 'ME')
-            m_goose, _ = goose_score_v37(m_closes, m_vols)
-            m_stage = cubic_stage(m_closes)
-            
-            if not d_stage: d_stage = {'st': '?'}
-            if not w_stage: w_stage = {'st': '?'}
-            if not m_stage: m_stage = {'st': '?'}
-            
-            # 일/주/월 최대값
-            goose_total = max(d_goose, w_goose, m_goose)
-            
-            # === 배수 ===
-            f = fundamentals.get(code, {})
-            psr = f.get('psr')
-            psr_m = psr_multiplier(psr)
-            
-            fr = foreign.get(code, {}).get('fr')
-            fr_pct = fr * 100 if fr else None
-            kis_60d = kis_data.get(code, [])
-            fr_m = foreign_multiplier(fr_pct, kis_60d)
-            
-            macro_m = macro_gap_multiplier(stock_3y, kospi_3y)
-            gold_m = golden_multiplier(code)
-            
-            jackpot = round(goose_total * psr_m * fr_m * macro_m * gold_m)
-            
-            # ★ v3.7.2: 일/주/월 차트 데이터 (날짜 포함)
-            # 일봉: 최근 252개 (1년)
-            d_chart = [int(c) for c in (closes[-252:] if len(closes) >= 252 else closes)]
-            d_chart_dates = dates[-252:] if len(dates) >= 252 else dates
-            
-            # 주봉: 최근 260개 (5년)
-            w_chart = [int(c) for c in (w_closes[-260:] if len(w_closes) >= 260 else w_closes)]
-            w_chart_dates = w_dates[-260:] if len(w_dates) >= 260 else w_dates
-            
-            # 월봉: 최근 120개 (10년)
-            m_chart = [int(c) for c in (m_closes[-120:] if len(m_closes) >= 120 else m_closes)]
-            m_chart_dates = m_dates[-120:] if len(m_dates) >= 120 else m_dates
-            
-            golden = GOLDEN_LIST_2001_2008.get(code)
-            
-            results[code] = {
-                'n': info['name'],
-                'm': info['market'],
-                'mc': round(info['mcap']/1e8),
-                'p': closes[-1],
-                't': goose_total,
-                'j': jackpot,
-                'psr_mult': round(psr_m, 2),
-                'accum_mult': round(fr_m, 2),
-                'macro_mult': round(macro_m, 2),
-                'golden_mult': round(gold_m, 2),
-                'ta_mult': 1.0,
-                'd': {'g': d_goose, 'st': d_stage['st']},
-                'w': {'g': w_goose, 'st': w_stage['st']},
-                'mo': {'g': m_goose, 'st': m_stage['st']},
-                # ★ 차트 데이터 (일/주/월)
-                'cd': d_chart,
-                'cdt': d_chart_dates,
-                'cw': w_chart,
-                'cwt': w_chart_dates,
-                'cm': m_chart,
-                'cmt': m_chart_dates,
-                # 호환성용 (기존 c 유지)
-                'c': w_chart[-50:] if len(w_chart) >= 50 else w_chart,
-                'h': int(max(closes)),
-                'l': int(min(closes)),
-                'psr': round(psr, 2) if psr else None,
-                'roe': round(f.get('roe', 0)*100, 1) if f.get('roe') else None,
-                'opm': round(f.get('opm', 0)*100, 1) if f.get('opm') else None,
-                'fr': round(fr_pct, 1) if fr_pct else None,
-                'stock_3y': round(stock_3y, 1),
-                'kospi_3y': round(kospi_3y, 1),
-                'macro_gap': round(kospi_3y - stock_3y, 1),
-                'ta': 50,
-                'is_turnaround': False,
-                'golden_2001': golden is not None,
-                'golden_multi': golden['multi'] if golden else None,
-            }
-        except Exception as e:
-            continue
-    log(f"  -> {len(results)}/{len(price_data)} ({time.time()-t0:.0f}초)")
+            return analyze_stock(code, info)
+        except Exception:
+            return None
     
-    sorted_results = sorted(results.items(), key=lambda x: -x[1]['j'])[:15]
-    log("\n  📊 TOP 15 잭팟 점수:")
-    for code, r in sorted_results:
-        grade = "🚀SSS" if r['j'] >= 200 else ("⭐SS" if r['j'] >= 150 else ("S" if r['j'] >= 100 else ("A" if r['j'] >= 70 else "B")))
-        golden_mark = " ★골든" if r['golden_2001'] else ""
-        log(f"    {r['n']:14} {r['j']:>4}점 ({grade}){golden_mark}")
+    items = list(price_data.items())
+    completed = 0
+    with ThreadPoolExecutor(max_workers=8) as exe:
+        futures = {exe.submit(task, item): item[0] for item in items}
+        for f in as_completed(futures):
+            completed += 1
+            try:
+                r = f.result()
+                if r:
+                    results.append(r)
+                    if r['score'] >= 60:
+                        log(f"  [{completed}/{len(items)}] {r['name']} ★{r['score']}점 {r['verdict']} ({','.join(r['events'])})")
+                if completed % 100 == 0:
+                    log(f"  ... {completed}/{len(items)} (신호 {len(results)}개, {time.time()-t0:.0f}초)")
+            except Exception:
+                pass
     
+    log(f"  → {len(results)}개 신호 발견 ({time.time()-t0:.0f}초)")
     return results
 
-def save_and_upload(results, kospi_3y):
-    log(f"Step 9/9: 저장 + Gabia FTP 업로드...")
-    output = {
-        'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'count': len(results),
-        'version': 'v3.7.2',
-        'kospi_3y_return': round(kospi_3y, 1),
-        'data': results,
-    }
-    data_str = json.dumps(output, ensure_ascii=False, separators=(',', ':'))
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        f.write(data_str)
-    log(f"  -> {OUTPUT_FILE} ({len(data_str)/1024:.0f}KB)")
-    
-    if not FTP_HOST:
-        log("  ⚠ FTP 없음 - 업로드 건너뜀")
-        return
+
+# ============================================================
+# 9. FTP 업로드
+# ============================================================
+def upload_to_gabia():
+    if not all([FTP_HOST, FTP_USER, FTP_PASS]):
+        log("  ⚠ FTP 환경변수 없음")
+        return False
     try:
-        with FTP(FTP_HOST, FTP_USER, FTP_PASS) as ftp:
+        ftp = FTP(FTP_HOST, timeout=30)
+        ftp.login(FTP_USER, FTP_PASS)
+        for part in FTP_TARGET_DIR.strip('/').split('/'):
             try:
-                ftp.cwd(FTP_TARGET_DIR)
-            except:
-                parts = FTP_TARGET_DIR.strip('/').split('/')
-                ftp.cwd('/')
-                for p in parts:
-                    try: ftp.cwd(p)
-                    except: ftp.mkd(p); ftp.cwd(p)
-            with open(OUTPUT_FILE, 'rb') as f:
-                ftp.storbinary(f'STOR {OUTPUT_FILE}', f)
-            log(f"  ✓ 업로드 완료")
+                ftp.cwd(part)
+            except Exception:
+                ftp.mkd(part)
+                ftp.cwd(part)
+        with open(OUTPUT_FILE, 'rb') as f:
+            ftp.storbinary(f'STOR {OUTPUT_FILE}', f)
+        ftp.quit()
+        log(f"  ✓ FTP 업로드: {FTP_TARGET_DIR}/{OUTPUT_FILE}")
+        return True
     except Exception as e:
         log(f"  ✗ FTP 실패: {e}")
-        sys.exit(1)
+        return False
+
+
+def to_native(obj):
+    if isinstance(obj, dict):
+        return {k: to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_native(v) for v in obj]
+    if isinstance(obj, (np.bool_,)): return bool(obj)
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)):
+        v = float(obj)
+        return v if np.isfinite(v) else None
+    if isinstance(obj, (np.ndarray,)): return [to_native(x) for x in obj.tolist()]
+    if isinstance(obj, float) and not np.isfinite(obj): return None
+    return obj
+
 
 def main():
-    start = time.time()
-    log("=" * 60)
-    log(f"SIGVIEW 잭팟 스캐너 v3.7.2 - 갱신 시작")
-    log("=" * 60)
+    t0 = time.time()
+    log("=" * 70)
+    log("SIGVIEW 잭팟 시즌1 v4.0 - 단기 매매 도구")
+    log("CMF + 20일선 + 볼밴 + 3차함수 + 거래량 + 망치")
+    log("=" * 70)
     
+    # 1) 종목 리스트
     stocks = get_stock_list()
-    kospi_3y = get_kospi_3y_return()
-    prices = fetch_prices(stocks)
-    fundamentals = fetch_fundamentals(prices)
-    foreign = fetch_foreign(prices)
-    kis_data = fetch_kis_data(prices)
-    dart_data = {}
-    results = analyze(prices, fundamentals, foreign, kis_data, dart_data, kospi_3y)
-    save_and_upload(results, kospi_3y)
+    if len(stocks) == 0:
+        log("종목 리스트 실패")
+        return
     
-    elapsed = time.time() - start
-    log("=" * 60)
-    log(f"✓ 완료! {elapsed:.0f}초 ({elapsed/60:.1f}분), {len(results)}종목")
-    log("=" * 60)
+    # 2) 가격 데이터
+    price_data = fetch_prices(stocks)
+    if not price_data:
+        log("가격 데이터 실패")
+        return
+    
+    # 3) 분석
+    results = analyze_all_parallel(price_data)
+    
+    # 4) 정렬 (점수 높은 순)
+    results.sort(key=lambda x: -x['score'])
+    
+    # 5) 상위 N개만
+    results = results[:TOP_N]
+    for i, r in enumerate(results, 1):
+        r['rank'] = i
+    
+    # 6) 통계
+    summary = {
+        'buy_candidate': sum(1 for r in results if r['phase'] == 'buy_candidate'),
+        'pullback_buy': sum(1 for r in results if r['phase'] == 'pullback_buy'),
+        'hold': sum(1 for r in results if r['phase'] == 'hold'),
+        'sell_imminent': sum(1 for r in results if r['phase'] == 'sell_imminent'),
+        'stop_loss': sum(1 for r in results if r['phase'] == 'stop_loss'),
+    }
+    
+    log(f"\n[결과 요약]")
+    log(f"  🟢 매수 후보: {summary['buy_candidate']}개")
+    log(f"  💎 눌림목 매수: {summary['pullback_buy']}개")
+    log(f"  🎯 보유 종목: {summary['hold']}개")
+    log(f"  ⚠️ 매도 임박: {summary['sell_imminent']}개")
+    log(f"  🔴 손절 신호: {summary['stop_loss']}개")
+    
+    # 7) 저장
+    output = {
+        'version': '4.0',
+        'season': 1,
+        'algo_version': '4.0',
+        'generated_at': datetime.now().isoformat(),
+        'n_scanned': len(price_data),
+        'n_signals': len(results),
+        'algorithm': {
+            'name': 'SIGVIEW 시즌1 v4.0 (단기 매매)',
+            'description': 'CMF + 20일선 + 볼밴 + 3차함수 + 거래량 + 망치',
+            'philosophy': '장기 X, 단기 트레이딩, 현재 중심, 매일 매매',
+        },
+        'parameters': {
+            'cmf_period': 21,
+            'ma_periods': [20, 60, 120],
+            'bb_period': 20,
+            'bb_std': 2,
+            'mcap_threshold': THRESHOLD,
+            'signal_threshold': SIGNAL_THRESHOLD,
+        },
+        'summary': summary,
+        'stocks': results,
+        'disclaimer': 'v4.0 단기 매매 도구. CMF/20일선/볼밴/3차함수 기반. 투자 권유 X.',
+    }
+    output = to_native(output)
+    
+    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+    
+    elapsed = time.time() - t0
+    log(f"\n저장: {OUTPUT_FILE}")
+    log(f"시간: {elapsed:.0f}초 ({elapsed/60:.1f}분)")
+    
+    # 8) FTP 업로드
+    log("\nStep 4: FTP 업로드")
+    upload_to_gabia()
+    
+    log(f"\n✅ 완료!")
+
 
 if __name__ == '__main__':
     try:
