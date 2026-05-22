@@ -1,42 +1,31 @@
-name: SIGVIEW 잭팟 시즌1 v4.0 (매일 단기 매매)
+name: SIGVIEW 잭팟 시즌1 v4.2 (매일)
 on:
   schedule:
-    # 매일 21:30 UTC = 한국 다음날 06:30 (장 시작 전)
-    - cron: '30 21 * * 1-5'
+    - cron: '30 21 * * 1-5'  # 매일 06:30 KST (월~금)
   workflow_dispatch:
 
 jobs:
   daily-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-
-      - name: Install dependencies
-        run: |
+      - run: |
           python -m pip install --upgrade pip
-          pip install numpy pandas scipy yfinance finance-datareader requests
-
-      - name: Run v4.0 (단기 매매)
-        env:
+          pip install numpy pandas yfinance finance-datareader
+      - env:
           FTP_HOST: ${{ secrets.FTP_HOST }}
           FTP_USER: ${{ secrets.FTP_USER }}
           FTP_PASS: ${{ secrets.FTP_PASS }}
           FTP_TARGET_DIR: ${{ secrets.FTP_TARGET_DIR }}
         run: python fetch_data.py
-
-      - name: Backup result
-        if: always()
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jackpot-v4-${{ github.run_number }}
+          name: jackpot-v42-${{ github.run_number }}
           path: jackpot.json
           retention-days: 14
