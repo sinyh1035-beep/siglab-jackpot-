@@ -70,9 +70,9 @@ FTP_TARGET_DIR = os.environ.get('FTP_TARGET_DIR', '/wp-content/data')
 
 OUTPUT_FILE = 'value.json'
 
-# 시총 범위: 1,000억 ~ 3조
-MCAP_MIN = 100_000_000_000      # 1천억
-MCAP_MAX = 3_000_000_000_000    # 3조
+# 시총 범위: 3,000억 ~ 5조 (잡주 컷 + 텐배거 가능 구간)
+MCAP_MIN = 300_000_000_000      # 3천억
+MCAP_MAX = 5_000_000_000_000    # 5조
 
 
 def log(msg):
@@ -84,7 +84,7 @@ def log(msg):
 # 1단계: 종목 리스트 (1000억~3조)
 # ============================================
 def get_stock_universe():
-    log("Step 1: 시총 1,000억~3조 종목 추출...")
+    log("Step 1: 시총 3,000억~5조 종목 추출...")
     krx = fdr.StockListing('KRX')
     krx = krx[krx['Market'].isin(['KOSPI', 'KOSDAQ'])]
     filtered = krx[(krx['Marcap'] >= MCAP_MIN) & (krx['Marcap'] <= MCAP_MAX)].copy()
@@ -558,9 +558,21 @@ def analyze_stock(code, info):
             grade = '⚪ 관찰'
             tier = 4
         
-        # 차트 데이터 (UI용)
-        closes = [int(round(c)) for c in df['Close'].iloc[-60:].tolist()]
-        dates = [d.strftime('%Y-%m-%d') for d in df.index[-60:]]
+        # 차트 데이터 (UI용) - 일봉/주봉/월봉
+        # 일봉: 1년치 (252일)
+        df_d = df.iloc[-252:] if len(df) > 252 else df
+        closes_d = [int(round(c)) for c in df_d['Close'].tolist()]
+        dates_d = [d.strftime('%Y-%m-%d') for d in df_d.index]
+        
+        # 주봉 (금요일 종가)
+        df_w = df['Close'].resample('W-FRI').last().dropna()
+        closes_w = [int(round(c)) for c in df_w.tolist()]
+        dates_w = [d.strftime('%Y-%m-%d') for d in df_w.index]
+        
+        # 월봉 (월말 종가)
+        df_m = df['Close'].resample('ME').last().dropna()
+        closes_m = [int(round(c)) for c in df_m.tolist()]
+        dates_m = [d.strftime('%Y-%m-%d') for d in df_m.index]
         
         return {
             'code': code,
@@ -586,8 +598,9 @@ def analyze_stock(code, info):
                 'stealth': e5,
             },
             'chart_data': {
-                'closes': closes,
-                'dates': dates,
+                'cd': closes_d, 'cdt': dates_d,   # 일봉
+                'cw': closes_w, 'cwt': dates_w,   # 주봉
+                'cm': closes_m, 'cmt': dates_m,   # 월봉
             },
         }
     except Exception as e:
@@ -673,7 +686,7 @@ def main():
     log("SIGVIEW VALUE v1.0 - 텐배거 발굴기 (스텔스 매집 강조)")
     log("✅ 백테스트: 텐배거 7/7 (100%) 사전 감지")
     log("💎 다이아몬드 85+ / 🥇 골드 70+ / 🥈 실버 55+")
-    log("시총: 1,000억 ~ 3조")
+    log("시총: 3,000억 ~ 5조 (잡주 컷)")
     log("=" * 70)
     
     # 1. 종목 리스트
