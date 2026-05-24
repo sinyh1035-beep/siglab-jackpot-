@@ -160,7 +160,7 @@ def fetch_financials(code):
         return None
     
     try:
-        quarters = dart.get_quarterly_financials(code, years=2)  # 2년치 = 최대 8분기
+        quarters = dart.get_quarterly_financials(code, years=1)  # 1년치 = 최대 4분기 (속도 2배)
         if not quarters or len(quarters) < 2:
             return None
         # 최신순으로 정렬 (Q4 2025가 [0], Q4 2024가 [4])
@@ -611,8 +611,8 @@ def analyze_all_parallel(price_data):
     
     items = list(price_data.items())
     completed = 0
-    # DART는 분당 1000회 제한 → max_workers=3으로 안전하게
-    with ThreadPoolExecutor(max_workers=3) as exe:
+    # DART는 분당 1000회 제한 → max_workers=5로 속도 ↑
+    with ThreadPoolExecutor(max_workers=5) as exe:
         futures = {exe.submit(task, item): item[0] for item in items}
         for f in as_completed(futures):
             completed += 1
