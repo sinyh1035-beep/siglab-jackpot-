@@ -81,19 +81,18 @@ def get_stock_universe():
     krx = krx[krx['Market'].isin(['KOSPI', 'KOSDAQ'])]
     filtered = krx[(krx['Marcap'] >= MCAP_MIN) & (krx['Marcap'] <= MCAP_MAX)].copy()
     
-    # ★ 우선주 제외 (텐배거 가능성 X)
-    # 우선주 패턴: 종목명 끝에 '우', '우B', '우C', '2우B', '3우B' 등
-    before_pref = len(filtered)
+    # ★ 우선주는 포함! (권대순 전략: 본주 강세 + 우선주 괴리 = 키맞추기)
+    # 우선주 식별만 해놓고 점수 계산 시 활용
     pref_pattern = r'우$|우[A-Z]$|\d우[A-Z]?$'
-    filtered = filtered[~filtered['Name'].str.contains(pref_pattern, regex=True, na=False)]
-    pref_excluded = before_pref - len(filtered)
+    filtered['is_pref'] = filtered['Name'].str.contains(pref_pattern, regex=True, na=False)
+    pref_count = filtered['is_pref'].sum()
     
     # ★ 리츠 제외 (배당주, 텐배거 X)
     before_reit = len(filtered)
     filtered = filtered[~filtered['Name'].str.contains('리츠', na=False)]
     reit_excluded = before_reit - len(filtered)
     
-    # ★ 스팩 제외 (목적 회사, 합병 전엔 의미 없음)
+    # ★ 스팩 제외
     before_spac = len(filtered)
     filtered = filtered[~filtered['Name'].str.contains('스팩|기업인수', regex=True, na=False)]
     spac_excluded = before_spac - len(filtered)
@@ -105,8 +104,20 @@ def get_stock_universe():
     
     filtered = filtered.sort_values('Marcap', ascending=False).reset_index(drop=True)
     
-    log(f"  → {len(filtered)}개 종목 (우선주 {pref_excluded}, 리츠 {reit_excluded}, 스팩 {spac_excluded}, ETF {etf_excluded} 제외)")
+    log(f"  → {len(filtered)}개 종목 (우선주 {pref_count}개 포함, 리츠 {reit_excluded}, 스팩 {spac_excluded}, ETF {etf_excluded} 제외)")
     return filtered
+
+
+def find_common_code(pref_code):
+    """우선주 코드 → 본주 코드 변환
+    예: 005935 (삼성전자우) → 005930 (삼성전자)
+    """
+    if not pref_code or len(pref_code) != 6:
+        return None
+    last_digit = pref_code[-1]
+    if last_digit in ['5', '7']:
+        return pref_code[:-1] + '0'
+    return None
 
 
 # ============================================
@@ -154,6 +165,7 @@ def fetch_prices(stocks):
                         'name': row['Name'],
                         'market': row['Market'],
                         'mcap': int(row['Marcap']),
+                        'is_pref': bool(row.get('is_pref', False)),  # ★ 우선주 여부
                         'df': df,
                     }
             except Exception:
@@ -535,7 +547,78 @@ def score_stealth_accumulation(df):
 # ============================================
 # 종합 분석
 # ============================================
-def analyze_stock(code, info):
+def score_preferred_gap(code, info, all_price_data):
+    """
+    ★ 권대순 우선주 키맞추기 전략
+    
+    조건:
+    1. 본주가 60일 +20% 이상 (강세)
+    2. 본주 vs 우선주 괴리율 30%+ (우선주가 본주보다 30%+ 쌈)
+    3. 우선주가 본주보다 덜 올랐음 (키맞추기 여지)
+    
+    보너스 점수: 최대 20점 (스텔스 30점 다음 가중치)
+    """
+    if not info.get('is_pref'):
+        return 0, []
+    
+    common_code = find_common_code(code)
+    if not common_code or common_code not in all_price_data:
+        return 0, []
+    
+    common_info = all_price_data[common_code]
+    common_df = common_info['df']
+    pref_df = info['df']
+    
+    if len(common_df) < 60 or len(pref_df) < 60:
+        return 0, []
+    
+    c_now = common_df['Close'].iloc[-1]
+    p_now = pref_df['Close'].iloc[-1]
+    
+    # 괴리율 (본주 - 우선주) / 본주 * 100
+    # 양수 = 우선주가 본주보다 쌈 (키맞추기 여지)
+    gap_pct = (c_now - p_now) / c_now * 100 if c_now > 0 else 0
+    
+    # 60일 변화율
+    c_60d = (c_now - common_df['Close'].iloc[-60]) / common_df['Close'].iloc[-60] * 100
+    p_60d = (p_now - pref_df['Close'].iloc[-60]) / pref_df['Close'].iloc[-60] * 100
+    
+    # 갭 변화 (본주 - 우선주 60일 변화 차이)
+    gap_widening = c_60d - p_60d  # 양수 = 본주가 더 빨리 올라서 갭이 벌어짐
+    
+    score = 0
+    events = []
+    
+    # (1) 본주 강세 (8점)
+    if c_60d > 30:
+        score += 8; events.append(f'🔥본주폭등(+{c_60d:.0f}%)')
+    elif c_60d > 15:
+        score += 6; events.append(f'본주강세(+{c_60d:.0f}%)')
+    elif c_60d > 5:
+        score += 3; events.append(f'본주우세(+{c_60d:.0f}%)')
+    else:
+        return 0, []  # 본주가 안 오르면 키맞추기 의미 X
+    
+    # (2) 괴리율 (8점) - 본주 대비 우선주 할인율
+    if gap_pct > 60:
+        score += 8; events.append(f'🎯대괴리({gap_pct:.0f}%)')
+    elif gap_pct > 45:
+        score += 6; events.append(f'큰괴리({gap_pct:.0f}%)')
+    elif gap_pct > 30:
+        score += 4; events.append(f'괴리({gap_pct:.0f}%)')
+    elif gap_pct > 20:
+        score += 2
+    
+    # (3) 갭 벌어짐 (4점) - 본주가 더 빨리 올라서 키맞추기 여지 큼
+    if gap_widening > 20:
+        score += 4; events.append(f'키맞추기여지({gap_widening:.0f}%p)')
+    elif gap_widening > 10:
+        score += 2; events.append(f'갭벌어짐({gap_widening:.0f}%p)')
+    
+    return min(score, 20), events
+
+
+def analyze_stock(code, info, all_price_data=None):
     df = info['df']
     if df is None or len(df) < 120:
         return None
@@ -553,24 +636,36 @@ def analyze_stock(code, info):
         s4, e4 = score_chart(df)                       # 15점
         s5, e5 = score_stealth_accumulation(df)        # 30점
         
-        total = s1 + s2 + s3 + s4 + s5
+        # ★ 6번째: 우선주 키맞추기 보너스 (우선주만 적용, 최대 20점)
+        s6, e6 = 0, []
+        if info.get('is_pref') and all_price_data:
+            s6, e6 = score_preferred_gap(code, info, all_price_data)
         
-        # 등급 (DART 작동 여부에 따라 동적 만점 계산)
+        total = s1 + s2 + s3 + s4 + s5 + s6
+        
+        # ★ 등급 (DART 데이터 있는 종목만 정식 등급)
         has_dart_data = (s1 + s2 + s3) > 0
-        max_possible = 100 if has_dart_data else 45
-        ratio = total / max_possible * 100
+        is_pref_play = s6 >= 8  # 우선주 키맞추기 후보
         
-        if ratio >= 75:
-            grade = '💎 다이아몬드'
-            tier = 0
-        elif ratio >= 60:
-            grade = '🥇 골드'
-            tier = 1
-        elif ratio >= 45:
-            grade = '🥈 실버'
-            tier = 2
+        if has_dart_data or is_pref_play:
+            # 우선주는 최대 120점 (100+20), 본주는 100점
+            max_score = 120 if info.get('is_pref') else 100
+            ratio = total / max_score * 100
+            
+            if ratio >= 60:
+                grade = '💎 다이아몬드'
+                tier = 0
+            elif ratio >= 45:
+                grade = '🥇 골드'
+                tier = 1
+            elif ratio >= 32:
+                grade = '🥈 실버'
+                tier = 2
+            else:
+                grade = '⚪ 관찰'
+                tier = 4
         else:
-            grade = '⚪ 관찰'
+            grade = '⚪ DART無 (참고용)'
             tier = 4
         
         # 차트 데이터 - 일봉/주봉/월봉
@@ -586,7 +681,7 @@ def analyze_stock(code, info):
         closes_m = [int(round(c)) for c in df_m.tolist()]
         dates_m = [d.strftime('%Y-%m-%d') for d in df_m.index]
         
-        return {
+        result = {
             'code': code,
             'name': info['name'],
             'market': info['market'],
@@ -595,12 +690,14 @@ def analyze_stock(code, info):
             'total_score': total,
             'tier': tier,
             'grade': grade,
+            'is_pref': info.get('is_pref', False),
             'scores': {
                 'fundamentals': s1,
                 'valuation': s2,
                 'growth': s3,
                 'chart': s4,
                 'stealth': s5,
+                'pref_gap': s6,  # ★ 새 카테고리
             },
             'events': {
                 'fundamentals': e1,
@@ -608,6 +705,7 @@ def analyze_stock(code, info):
                 'growth': e3,
                 'chart': e4,
                 'stealth': e5,
+                'pref_gap': e6,  # ★ 새 카테고리
             },
             'chart_data': {
                 'cd': closes_d, 'cdt': dates_d,
@@ -616,6 +714,7 @@ def analyze_stock(code, info):
             },
             'has_dart': has_dart_data,
         }
+        return result
     except Exception as e:
         return None
 
@@ -629,13 +728,13 @@ def analyze_all_parallel(price_data):
     def task(item):
         code, info = item
         try:
-            return analyze_stock(code, info)
+            # ★ 우선주 분석을 위해 전체 price_data 전달
+            return analyze_stock(code, info, price_data)
         except Exception:
             return None
     
     items = list(price_data.items())
     completed = 0
-    # DART는 분당 1000회 제한 → max_workers=5로 속도 ↑
     with ThreadPoolExecutor(max_workers=5) as exe:
         futures = {exe.submit(task, item): item[0] for item in items}
         for f in as_completed(futures):
