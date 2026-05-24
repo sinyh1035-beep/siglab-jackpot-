@@ -223,17 +223,65 @@ def fetch_financials(code):
 # ============================================
 # 5단계: 펀더멘털 점수 (20점)
 # ============================================
-def get_debt_ratio_yf(code, market):
-    """yfinance에서 부채비율 가져오기"""
+def get_debt_ratio_dart(code):
+    """
+    DART에서 부채비율 가져오기 (yfinance 대신)
+    부채총계 / 자본총계 * 100
+    """
+    if not HAS_DART:
+        return None
     try:
-        yf_code = f"{code}.{'KS' if market=='KOSPI' else 'KQ'}"
-        t = yf.Ticker(yf_code)
-        info = t.info
-        debt = info.get('debtToEquity')
-        if debt is not None:
-            return float(debt)
+        corp_code = dart.corp_codes.get(code)
+        if not corp_code:
+            return None
+        
+        import requests
+        # 최신 분기 재무상태표
+        current_year = datetime.now().year
+        for year_offset in [0, -1]:  # 올해, 작년 순서로 시도
+            year = current_year + year_offset
+            for rprt_code in ['11014', '11012', '11013', '11011']:  # 3Q, 반기, 1Q, 사업
+                try:
+                    dart._rate_limit()
+                    r = requests.get(
+                        f"https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json",
+                        params={
+                            'crtfc_key': dart.api_key,
+                            'corp_code': corp_code,
+                            'bsns_year': str(year),
+                            'reprt_code': rprt_code,
+                            'fs_div': 'CFS',
+                        },
+                        timeout=8
+                    )
+                    data = r.json()
+                    if data.get('status') != '000':
+                        continue
+                    
+                    debt_total = equity_total = None
+                    for item in data.get('list', []):
+                        account_nm = item.get('account_nm', '')
+                        amount_str = item.get('thstrm_amount', '').replace(',', '')
+                        try:
+                            amount = int(amount_str) if amount_str else None
+                        except:
+                            continue
+                        if account_nm == '부채총계':
+                            debt_total = amount
+                        elif account_nm == '자본총계':
+                            equity_total = amount
+                    
+                    if debt_total is not None and equity_total and equity_total > 0:
+                        return (debt_total / equity_total) * 100
+                except:
+                    continue
+        return None
     except Exception:
-        pass
+        return None
+
+
+def get_debt_ratio_yf(code, market):
+    """DEPRECATED - 호환성 유지용 (v11에서 사용 X)"""
     return None
 
 
@@ -1046,8 +1094,8 @@ def analyze_stock(code, info, all_price_data=None, skip_kis=False):
         # 재무 (DART)
         financials = fetch_financials(code)
         
-        # ★ 부채비율 (yfinance) - 부채 폭탄 컷용
-        debt_ratio = get_debt_ratio_yf(code, info['market'])
+        # ★ v11: DART에서 부채비율 (yfinance 제거 - 속도 ↑)
+        debt_ratio = get_debt_ratio_dart(code)
         
         # 기존 5개 + v9 신규 3개
         s1, e1, is_dangerous = score_fundamentals(financials, debt_ratio)
@@ -1212,7 +1260,7 @@ def analyze_all_parallel(price_data):
     
     items = list(price_data.items())
     completed = 0
-    with ThreadPoolExecutor(max_workers=8) as exe:
+    with ThreadPoolExecutor(max_workers=12) as exe:
         futures = {exe.submit(task_no_kis, item): item[0] for item in items}
         for f in as_completed(futures):
             completed += 1
@@ -1227,15 +1275,15 @@ def analyze_all_parallel(price_data):
     
     log(f"  ✓ 1단계 완료: {len(results)}개 ({time.time()-t0:.0f}초)")
     
-    # === 2단계: 상위 250개만 KIS 호출 ===
+    # === 2단계: 상위 150개만 KIS 호출 ===
     if HAS_KIS:
-        log("  💰 2단계: 상위 250개 KIS 수급 분석")
+        log("  💰 2단계: 상위 150개 KIS 수급 분석 (워커 8개)")
         t1 = time.time()
         
-        # total_score 상위 250개 선정 (단기 점수도 고려)
+        # total_score 상위 150개 선정 (단기 점수도 고려)
         results.sort(key=lambda x: (-(x['total_score'] + x.get('short_term_score', 0) * 1.5)), )
-        top_250 = results[:250]
-        rest = results[250:]
+        top_150 = results[:150]
+        rest = results[150:]
         
         # KIS 호출 + smart_money 점수 추가
         def task_kis_only(r):
@@ -1275,19 +1323,19 @@ def analyze_all_parallel(price_data):
                 return r
         
         kis_completed = 0
-        with ThreadPoolExecutor(max_workers=5) as exe:
-            futures = [exe.submit(task_kis_only, r) for r in top_250]
+        with ThreadPoolExecutor(max_workers=8) as exe:
+            futures = [exe.submit(task_kis_only, r) for r in top_150]
             for f in as_completed(futures):
                 kis_completed += 1
                 try:
                     f.result()
-                    if kis_completed % 50 == 0:
-                        log(f"    ... KIS {kis_completed}/250 ({time.time()-t1:.0f}초)")
+                    if kis_completed % 30 == 0:
+                        log(f"    ... KIS {kis_completed}/150 ({time.time()-t1:.0f}초)")
                 except Exception:
                     pass
         
-        log(f"  ✓ 2단계 완료: KIS 250개 ({time.time()-t1:.0f}초)")
-        results = top_250 + rest
+        log(f"  ✓ 2단계 완료: KIS 150개 ({time.time()-t1:.0f}초)")
+        results = top_150 + rest
     else:
         log("  ⚠️ KIS 비활성화 - 1단계만 수행")
     
@@ -1337,13 +1385,14 @@ def to_native(obj):
 def main():
     t0 = time.time()
     log("=" * 70)
-    log("SIGVIEW VALUE v3.0 - 텐배거 완전체")
-    log("✅ DART (펀더+저평가+성장) + KIS (외인/기관 매집)")
-    log("✅ 조용한 상승 패턴 - 텐배거 7/7 (100%) 검증")
-    log("✅ 우선주 키맞추기 (권대순 전략)")
-    log("✅ 부채 폭탄 자동 컷 + 중소형 가산점")
+    log("SIGVIEW VALUE v5.0 - 속도 최적화 + 장기/단기 레이어")
+    log("✅ DART 부채비율 (yfinance 제거 - 속도 2배)")
+    log("✅ 1단계: 전체 615개 (워커 12개)")
+    log("✅ 2단계: 상위 150개만 KIS (워커 8개)")
+    log("✅ 장기 점수 (150) + 🚀 단기 점수 (30) 분리")
+    log("✅ 텐배거 7/7 (100%) 조용한 상승 검증")
     log("💎 다이아 55%+ / 🥇 골드 42%+ / 🥈 실버 30%+")
-    log("시총: 3,000억 ~ 5조 (중소형 우대)")
+    log("⏱️ 목표 시간: 25~30분")
     log("=" * 70)
     
     # 1. 종목 리스트
@@ -1415,7 +1464,7 @@ def main():
     data_dict = {r['code']: r for r in results}
     output = {
         'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'version': 'v4.0',
+        'version': 'v5.0',
         'generated_at': datetime.now().isoformat(),
         'count': len(results),
         'diamond_count': diamond,
@@ -1428,11 +1477,12 @@ def main():
         'mcap_min': MCAP_MIN,
         'mcap_max': MCAP_MAX,
         'algorithm': {
-            'name': 'SIGVIEW VALUE v4.0 (장기+단기 레이어 분리)',
+            'name': 'SIGVIEW VALUE v5.0 (속도 최적화 + 장기+단기 레이어)',
             'description': 'VALUE_RANK (장기 가치주) + MOMENTUM_READY (단기 자리)',
             'backtest': '텐배거 7/7 (100%) 조용한 상승 검증',
             'long_categories': '펀더(20)+저평(20)+성장(15)+차트(15)+스텔스(30)+조용(20)+수급(20)+중소형(10)+우선주(20)',
             'short_categories': 'CMF바닥+Elder+눌림+거래량회복+20MA수렴+압축+OBV+MACD - 과열감점',
+            'speed_optimizations': 'DART 부채(yfinance 제거), 워커 12개, KIS 150개만',
         },
         'stocks': results,
         'data': data_dict,
