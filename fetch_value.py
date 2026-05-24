@@ -80,8 +80,32 @@ def get_stock_universe():
     krx = fdr.StockListing('KRX')
     krx = krx[krx['Market'].isin(['KOSPI', 'KOSDAQ'])]
     filtered = krx[(krx['Marcap'] >= MCAP_MIN) & (krx['Marcap'] <= MCAP_MAX)].copy()
+    
+    # ★ 우선주 제외 (텐배거 가능성 X)
+    # 우선주 패턴: 종목명 끝에 '우', '우B', '우C', '2우B', '3우B' 등
+    before_pref = len(filtered)
+    pref_pattern = r'우$|우[A-Z]$|\d우[A-Z]?$'
+    filtered = filtered[~filtered['Name'].str.contains(pref_pattern, regex=True, na=False)]
+    pref_excluded = before_pref - len(filtered)
+    
+    # ★ 리츠 제외 (배당주, 텐배거 X)
+    before_reit = len(filtered)
+    filtered = filtered[~filtered['Name'].str.contains('리츠', na=False)]
+    reit_excluded = before_reit - len(filtered)
+    
+    # ★ 스팩 제외 (목적 회사, 합병 전엔 의미 없음)
+    before_spac = len(filtered)
+    filtered = filtered[~filtered['Name'].str.contains('스팩|기업인수', regex=True, na=False)]
+    spac_excluded = before_spac - len(filtered)
+    
+    # ★ ETF/ETN 제외
+    before_etf = len(filtered)
+    filtered = filtered[~filtered['Name'].str.contains('KODEX|TIGER|ARIRANG|KOSEF|HANARO|KBSTAR|SOL|RISE|ACE', regex=True, na=False)]
+    etf_excluded = before_etf - len(filtered)
+    
     filtered = filtered.sort_values('Marcap', ascending=False).reset_index(drop=True)
-    log(f"  → {len(filtered)}개 종목")
+    
+    log(f"  → {len(filtered)}개 종목 (우선주 {pref_excluded}, 리츠 {reit_excluded}, 스팩 {spac_excluded}, ETF {etf_excluded} 제외)")
     return filtered
 
 
