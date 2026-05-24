@@ -777,6 +777,191 @@ def score_small_cap_bonus(mcap):
 
 
 # ============================================
+# 🚀 NEW: 단기 모멘텀 점수 (30점) - "터지기 직전" 자리
+# ============================================
+def calc_obv(df):
+    """On-Balance Volume"""
+    obv = (df['Volume'] * ((df['Close'] > df['Close'].shift(1)).astype(int) -
+                            (df['Close'] < df['Close'].shift(1)).astype(int))).cumsum()
+    return obv
+
+
+def calc_macd(df, fast=12, slow=26, signal=9):
+    """MACD line + signal line"""
+    ema_fast = df['Close'].ewm(span=fast, adjust=False).mean()
+    ema_slow = df['Close'].ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line, signal_line
+
+
+def score_short_term(df):
+    """
+    🚀 단기 모멘텀 - "곧 움직일 자리" (0~30점)
+    
+    가산 8개:
+    + CMF 바닥 상승 (5)
+    + Elder Ray 회복 (4)
+    + 5~20일 눌림 (5)
+    + 거래량 감소 후 회복 (4)
+    + 20일선 수렴 (4)
+    + 변동성 압축 (3)
+    + OBV 상승 (3)
+    + MACD 골든 직전 (2)
+    
+    과열 감점 3개:
+    - 5일 +20%+ 급등 (-10)
+    - 20일 이격도 110%+ (-5)
+    - 거래량 폭증 + 윗꼬리 (-5)
+    """
+    if len(df) < 60:
+        return 0, []
+    
+    score = 0
+    events = []
+    
+    c = df['Close'].iloc[-1]
+    high = df['High']
+    low = df['Low']
+    close = df['Close']
+    vol = df['Volume']
+    
+    # === 가산 8개 ===
+    
+    # 1) CMF 바닥 상승 (5점)
+    cmf = calc_cmf(df, 21)
+    cmf_now = cmf.iloc[-1] if not pd.isna(cmf.iloc[-1]) else 0
+    cmf_5d = cmf.iloc[-5] if len(cmf) >= 5 and not pd.isna(cmf.iloc[-5]) else 0
+    cmf_15d = cmf.iloc[-15] if len(cmf) >= 15 and not pd.isna(cmf.iloc[-15]) else 0
+    
+    if cmf_15d < 0 and cmf_now > 0:
+        score += 5; events.append(f'🎯CMF바닥반등')
+    elif cmf_5d < cmf_now and cmf_now > 0:
+        score += 3; events.append('CMF상승')
+    elif cmf_now > 0:
+        score += 1
+    
+    # 2) Elder Ray 회복 (4점)
+    ema13 = close.ewm(span=13, adjust=False).mean()
+    bull_power = high - ema13
+    
+    bp_now = bull_power.iloc[-1]
+    bp_5d_ago = bull_power.iloc[-5] if len(bull_power) >= 5 else 0
+    
+    if bp_5d_ago < 0 and bp_now > 0:
+        score += 4; events.append('🎯Elder반전')
+    elif bp_now > 0 and bp_now > bp_5d_ago:
+        score += 2; events.append('Elder상승')
+    
+    # 3) 5~20일 눌림 (5점)
+    recent_high_20 = high.iloc[-20:].max()
+    current_dd = (c - recent_high_20) / recent_high_20 * 100
+    
+    if -15 <= current_dd <= -5:
+        score += 5; events.append(f'단기눌림({current_dd:.0f}%)')
+    elif -5 < current_dd <= -2:
+        score += 3; events.append('소폭눌림')
+    
+    # 4) 거래량 감소 후 회복 (4점)
+    vol_20 = vol.iloc[-20:].mean()
+    vol_10_5 = vol.iloc[-10:-5].mean() if len(vol) >= 10 else vol_20
+    vol_5 = vol.iloc[-5:].mean()
+    
+    if vol_10_5 < vol_20 * 0.7 and vol_5 > vol_10_5 * 1.3:
+        score += 4; events.append('🎯거래량회복')
+    elif vol_5 > vol_10_5:
+        score += 2; events.append('거래량증가')
+    
+    # 5) 20일선 수렴 (4점)
+    ma20 = close.rolling(20).mean()
+    ma20_now = ma20.iloc[-1]
+    if not pd.isna(ma20_now) and ma20_now > 0:
+        gap_ma20 = abs(c - ma20_now) / ma20_now * 100
+        if gap_ma20 <= 2:
+            score += 4; events.append('20MA수렴')
+        elif gap_ma20 <= 4:
+            score += 2
+    
+    # 6) 변동성 압축 (3점)
+    range_20d = (high.iloc[-20:].max() - low.iloc[-20:].min()) / low.iloc[-20:].min() * 100
+    range_10d = (high.iloc[-10:].max() - low.iloc[-10:].min()) / low.iloc[-10:].min() * 100
+    
+    if range_10d < range_20d * 0.6:
+        score += 3; events.append(f'변동압축')
+    elif range_10d < range_20d * 0.8:
+        score += 1
+    
+    # 7) OBV 상승 (3점)
+    obv = calc_obv(df)
+    obv_20d_ago = obv.iloc[-20] if len(obv) >= 20 else 0
+    obv_now = obv.iloc[-1]
+    
+    if obv_20d_ago != 0 and obv_now > obv_20d_ago * 1.05:
+        score += 3; events.append('OBV상승')
+    elif obv_now > obv_20d_ago:
+        score += 1
+    
+    # 8) MACD 골든 직전 (2점)
+    try:
+        macd_line, signal_line = calc_macd(df)
+        macd_now = macd_line.iloc[-1]
+        signal_now = signal_line.iloc[-1]
+        macd_5d = macd_line.iloc[-5]
+        signal_5d = signal_line.iloc[-5]
+        
+        if macd_now < signal_now:
+            gap_now = signal_now - macd_now
+            gap_5d = signal_5d - macd_5d if (signal_5d - macd_5d) > 0 else 1
+            if gap_now < gap_5d * 0.5:
+                score += 2; events.append('🎯MACD골든임박')
+        elif macd_now > signal_now and macd_5d < signal_5d:
+            score += 2; events.append('MACD골든발생')
+    except Exception:
+        pass
+    
+    # === 과열 감점 3개 (형 요청) ===
+    
+    # 1) 5일 +20%+ 급등 (-10점)
+    c_5d_ago = close.iloc[-5] if len(close) >= 5 else c
+    change_5d = (c - c_5d_ago) / c_5d_ago * 100 if c_5d_ago > 0 else 0
+    if change_5d > 20:
+        score -= 10; events.append(f'🔥과열({change_5d:.0f}%)')
+    elif change_5d > 15:
+        score -= 6; events.append(f'급등주의({change_5d:.0f}%)')
+    elif change_5d > 10:
+        score -= 3; events.append('상승누적')
+    
+    # 2) 20일 이격도 110%+ (-5점)
+    if not pd.isna(ma20_now) and ma20_now > 0:
+        disparity_20 = (c / ma20_now) * 100
+        if disparity_20 > 115:
+            score -= 5; events.append(f'🔥이격과열({disparity_20:.0f}%)')
+        elif disparity_20 > 110:
+            score -= 3; events.append(f'이격과열({disparity_20:.0f}%)')
+        elif disparity_20 > 107:
+            score -= 1
+    
+    # 3) 거래량 폭증 + 윗꼬리 (-5점)
+    vol_today = vol.iloc[-1]
+    vol_mean_20 = vol.iloc[-21:-1].mean() if len(vol) >= 21 else vol_20
+    
+    if vol_today > vol_mean_20 * 3:
+        today_high = high.iloc[-1]
+        today_close = close.iloc[-1]
+        today_open = df['Open'].iloc[-1]
+        
+        body = abs(today_close - today_open)
+        upper_wick = today_high - max(today_close, today_open)
+        
+        if body > 0 and upper_wick > body * 1.5:
+            score -= 5; events.append('🔥윗꼬리(폭증)')
+        elif vol_today > vol_mean_20 * 5:
+            score -= 3; events.append('거래량폭증')
+    
+    return max(min(score, 30), 0), events
+
+
+# ============================================
 # 종합 분석
 # ============================================
 def score_preferred_gap(code, info, all_price_data):
@@ -850,7 +1035,7 @@ def score_preferred_gap(code, info, all_price_data):
     return min(score, 20), events
 
 
-def analyze_stock(code, info, all_price_data=None):
+def analyze_stock(code, info, all_price_data=None, skip_kis=False):
     df = info['df']
     if df is None or len(df) < 120:
         return None
@@ -865,9 +1050,8 @@ def analyze_stock(code, info, all_price_data=None):
         debt_ratio = get_debt_ratio_yf(code, info['market'])
         
         # 기존 5개 + v9 신규 3개
-        s1, e1, is_dangerous = score_fundamentals(financials, debt_ratio)  # 펀더 (20점)
+        s1, e1, is_dangerous = score_fundamentals(financials, debt_ratio)
         
-        # ★ 부채 위험 종목은 다이아/골드 불가 (관찰만)
         if is_dangerous:
             s2, e2 = 0, []
             s3, e3 = 0, []
@@ -877,40 +1061,42 @@ def analyze_stock(code, info, all_price_data=None):
             s7, e7 = 0, []
             s8, e8 = 0, []
             s9, e9 = 0, []
+            st_score, st_events = 0, []
         else:
-            s2, e2 = score_valuation(financials, info['mcap'])     # 저평가 (20)
-            s3, e3 = score_growth(financials)                       # 성장 (15)
-            s4, e4 = score_chart(df)                                # 차트 (15)
-            s5, e5 = score_stealth_accumulation(df)                 # 스텔스 (30)
+            s2, e2 = score_valuation(financials, info['mcap'])
+            s3, e3 = score_growth(financials)
+            s4, e4 = score_chart(df)
+            s5, e5 = score_stealth_accumulation(df)
             
-            # 우선주 키맞추기 (우선주만)
             s6, e6 = 0, []
             if info.get('is_pref') and all_price_data:
                 s6, e6 = score_preferred_gap(code, info, all_price_data)
             
-            # ★ v9 NEW: 조용한 상승 (20점) - 7/7 검증
             s7, e7 = score_quiet_uptrend(df)
             
-            # ★ v9 NEW: 외인/기관 매집 (20점) - KIS API
-            s8, e8 = score_smart_money(code, df)
+            # ★ KIS는 2단계에서 별도 호출 (skip_kis=True면 0)
+            s8, e8 = 0, []
+            if not skip_kis:
+                try:
+                    s8, e8 = score_smart_money(code, df)
+                except Exception:
+                    s8, e8 = 0, []  # KIS 실패해도 전체 진행
             
-            # ★ v9 NEW: 중소형 가산점 (10점)
             s9, e9 = score_small_cap_bonus(info['mcap'])
+            
+            # ★ NEW: 단기 모멘텀 점수 (30점)
+            st_score, st_events = score_short_term(df)
         
         total = s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9
         
-        # ★ 등급 (v9 만점 재계산)
         has_dart_data = (s1 + s2 + s3) > 0
         is_pref_play = s6 >= 8
-        has_smart_money = s8 >= 8  # 외인/기관 강한 매집
+        has_smart_money = s8 >= 8
         
         if is_dangerous:
             grade = '🚨 부채위험 (관찰)'
             tier = 4
         elif has_dart_data or is_pref_play or has_smart_money:
-            # 만점 동적 계산
-            # 기본 100 + 우선주 20 + 조용 20 + 수급 20 + 중소형 10 = 170점
-            # 우선주: 170, 본주: 150 (우선주 키맞추기 점수 빠짐)
             max_score = 170 if info.get('is_pref') else 150
             ratio = total / max_score * 100
             
@@ -929,6 +1115,17 @@ def analyze_stock(code, info, all_price_data=None):
         else:
             grade = '⚪ DART無 (참고용)'
             tier = 4
+        
+        # ★ NEW: 단기 등급 (별도)
+        if st_score >= 22:
+            short_tier = 0  # 🚀 단기 매수 자리
+            short_grade = '🚀 단기준비'
+        elif st_score >= 15:
+            short_tier = 1
+            short_grade = '⚡ 단기관찰'
+        else:
+            short_tier = 4
+            short_grade = ''
         
         # 차트 데이터 - 일봉/주봉/월봉
         df_d = df.iloc[-252:] if len(df) > 252 else df
@@ -952,6 +1149,9 @@ def analyze_stock(code, info, all_price_data=None):
             'total_score': total,
             'tier': tier,
             'grade': grade,
+            'short_term_score': st_score,    # ★ NEW
+            'short_tier': short_tier,        # ★ NEW
+            'short_grade': short_grade,      # ★ NEW
             'is_pref': info.get('is_pref', False),
             'scores': {
                 'fundamentals': s1,
@@ -960,9 +1160,10 @@ def analyze_stock(code, info, all_price_data=None):
                 'chart': s4,
                 'stealth': s5,
                 'pref_gap': s6,
-                'quiet': s7,        # ★ NEW
-                'smart_money': s8,  # ★ NEW
-                'small_cap': s9,    # ★ NEW
+                'quiet': s7,
+                'smart_money': s8,
+                'small_cap': s9,
+                'short_term': st_score,      # ★ NEW
             },
             'events': {
                 'fundamentals': e1,
@@ -971,9 +1172,10 @@ def analyze_stock(code, info, all_price_data=None):
                 'chart': e4,
                 'stealth': e5,
                 'pref_gap': e6,
-                'quiet': e7,        # ★ NEW
-                'smart_money': e8,  # ★ NEW
-                'small_cap': e9,    # ★ NEW
+                'quiet': e7,
+                'smart_money': e8,
+                'small_cap': e9,
+                'short_term': st_events,     # ★ NEW
             },
             'chart_data': {
                 'cd': closes_d, 'cdt': dates_d,
@@ -989,37 +1191,107 @@ def analyze_stock(code, info, all_price_data=None):
 
 
 def analyze_all_parallel(price_data):
-    log(f"Step 4: 종합 분석 ({len(price_data)}종목)...")
-    log("  (DART + KIS API 호출 - 종목당 약 0.7초)")
+    """
+    2단계 분석 구조 (속도 최적화):
+    1단계: 전체 종목 - DART + 차트/스텔스/조용/단기 (KIS 제외)
+    2단계: 상위 250개만 - KIS 외인/기관 호출
+    """
+    log(f"Step 4: 종합 분석 ({len(price_data)}종목)")
+    log("  📊 1단계: 전체 종목 분석 (KIS 제외, 워커 8개)")
     t0 = time.time()
+    
+    # === 1단계: KIS 없이 전체 분석 ===
     results = []
     
-    def task(item):
+    def task_no_kis(item):
         code, info = item
         try:
-            return analyze_stock(code, info, price_data)
+            return analyze_stock(code, info, price_data, skip_kis=True)
         except Exception:
             return None
     
     items = list(price_data.items())
     completed = 0
-    # DART 1000회/분 + KIS 1000회/분 → max_workers=4
-    with ThreadPoolExecutor(max_workers=4) as exe:
-        futures = {exe.submit(task, item): item[0] for item in items}
+    with ThreadPoolExecutor(max_workers=8) as exe:
+        futures = {exe.submit(task_no_kis, item): item[0] for item in items}
         for f in as_completed(futures):
             completed += 1
             try:
                 r = f.result()
                 if r:
                     results.append(r)
-                    if r['tier'] == 0:
-                        log(f"  [{completed}] 💎 {r['name']} {r['total_score']}점")
-                if completed % 50 == 0:
-                    log(f"  ... {completed}/{len(items)} ({time.time()-t0:.0f}초)")
+                if completed % 100 == 0:
+                    log(f"    ... {completed}/{len(items)} ({time.time()-t0:.0f}초)")
             except Exception:
                 pass
     
-    log(f"  → {len(results)}개 ({time.time()-t0:.0f}초)")
+    log(f"  ✓ 1단계 완료: {len(results)}개 ({time.time()-t0:.0f}초)")
+    
+    # === 2단계: 상위 250개만 KIS 호출 ===
+    if HAS_KIS:
+        log("  💰 2단계: 상위 250개 KIS 수급 분석")
+        t1 = time.time()
+        
+        # total_score 상위 250개 선정 (단기 점수도 고려)
+        results.sort(key=lambda x: (-(x['total_score'] + x.get('short_term_score', 0) * 1.5)), )
+        top_250 = results[:250]
+        rest = results[250:]
+        
+        # KIS 호출 + smart_money 점수 추가
+        def task_kis_only(r):
+            code = r['code']
+            try:
+                df = price_data[code]['df']
+                s8, e8 = score_smart_money(code, df)
+                
+                # 점수 업데이트
+                old_s8 = r['scores'].get('smart_money', 0)
+                r['scores']['smart_money'] = s8
+                r['events']['smart_money'] = e8
+                r['total_score'] = r['total_score'] - old_s8 + s8
+                r['has_kis'] = s8 > 0
+                
+                # 등급 재계산
+                has_dart_data = r.get('has_dart', False)
+                is_pref_play = r['scores'].get('pref_gap', 0) >= 8
+                has_smart_money = s8 >= 8
+                is_pref = r.get('is_pref', False)
+                
+                if r['grade'] != '🚨 부채위험 (관찰)':
+                    if has_dart_data or is_pref_play or has_smart_money:
+                        max_score = 170 if is_pref else 150
+                        ratio = r['total_score'] / max_score * 100
+                        
+                        if ratio >= 55:
+                            r['grade'] = '💎 다이아몬드'; r['tier'] = 0
+                        elif ratio >= 42:
+                            r['grade'] = '🥇 골드'; r['tier'] = 1
+                        elif ratio >= 30:
+                            r['grade'] = '🥈 실버'; r['tier'] = 2
+                        else:
+                            r['grade'] = '⚪ 관찰'; r['tier'] = 4
+                return r
+            except Exception:
+                return r
+        
+        kis_completed = 0
+        with ThreadPoolExecutor(max_workers=5) as exe:
+            futures = [exe.submit(task_kis_only, r) for r in top_250]
+            for f in as_completed(futures):
+                kis_completed += 1
+                try:
+                    f.result()
+                    if kis_completed % 50 == 0:
+                        log(f"    ... KIS {kis_completed}/250 ({time.time()-t1:.0f}초)")
+                except Exception:
+                    pass
+        
+        log(f"  ✓ 2단계 완료: KIS 250개 ({time.time()-t1:.0f}초)")
+        results = top_250 + rest
+    else:
+        log("  ⚠️ KIS 비활성화 - 1단계만 수행")
+    
+    log(f"  → 총 {len(results)}개 ({time.time()-t0:.0f}초)")
     return results
 
 
@@ -1108,42 +1380,59 @@ def main():
     dart_count = sum(1 for r in results if r.get('has_dart'))
     kis_count = sum(1 for r in results if r.get('has_kis'))
     
-    log(f"\n[결과]")
-    log(f"  💎 다이아몬드 (75%+): {diamond}개")
-    log(f"  🥇 골드 (60%+): {gold}개")
-    log(f"  🥈 실버 (45%+): {silver}개")
-    log(f"  📊 DART 데이터 있는 종목: {dart_count}/{len(results)}")
-    log(f"  총 분석: {len(results)}개 ({time.time()-t0:.0f}초)")
-    log(f"  📊 DART: {dart_count} | 💰 KIS: {kis_count}")
+    # ★ NEW: 단기 통계
+    short_ready = sum(1 for r in results if r.get('short_tier') == 0)
+    short_watch = sum(1 for r in results if r.get('short_tier') == 1)
     
-    # TOP 10
-    log(f"\n💎 TOP 10:")
-    for r in results[:10]:
+    log(f"\n[결과]")
+    log(f"  💎 다이아몬드: {diamond}개")
+    log(f"  🥇 골드: {gold}개")
+    log(f"  🥈 실버: {silver}개")
+    log(f"  🚀 단기준비 (22점+): {short_ready}개")
+    log(f"  ⚡ 단기관찰 (15점+): {short_watch}개")
+    log(f"  📊 DART: {dart_count}/{len(results)} | 💰 KIS: {kis_count}/{len(results)}")
+    log(f"  총 분석: {len(results)}개 ({time.time()-t0:.0f}초)")
+    
+    # TOP 10 (장기 점수 기준)
+    log(f"\n💎 VALUE TOP 10 (장기):")
+    value_sorted = sorted(results, key=lambda x: -x['total_score'])
+    for i, r in enumerate(value_sorted[:10], 1):
         sc = r['scores']
         pref_str = ' 🔄' if r.get('is_pref') else ''
-        log(f"  {r['rank']:>2}. {r['name']:14s}{pref_str} {r['total_score']:>3}점")
-        log(f"      펀더{sc['fundamentals']}+저평{sc['valuation']}+성장{sc['growth']}+차트{sc['chart']}+스텔스{sc['stealth']}")
-        log(f"      🎯조용{sc.get('quiet',0)}+💰수급{sc.get('smart_money',0)}+🌱중소형{sc.get('small_cap',0)}+🔄우선{sc.get('pref_gap',0)}")
+        log(f"  {i:>2}. {r['name']:14s}{pref_str} V:{r['total_score']:>3}점 / S:{r.get('short_term_score', 0):>2}점")
+    
+    # TOP 10 (단기 점수 기준) ★ NEW
+    log(f"\n🚀 MOMENTUM TOP 10 (단기):")
+    short_sorted = sorted(results, key=lambda x: -x.get('short_term_score', 0))
+    for i, r in enumerate(short_sorted[:10], 1):
+        pref_str = ' 🔄' if r.get('is_pref') else ''
+        events = r.get('events', {}).get('short_term', [])
+        log(f"  {i:>2}. {r['name']:14s}{pref_str} S:{r.get('short_term_score', 0):>2}점 / V:{r['total_score']:>3}점")
+        if events:
+            log(f"      {', '.join(events[:5])}")
     
     # JSON 저장
     data_dict = {r['code']: r for r in results}
     output = {
         'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'version': 'v3.0',
+        'version': 'v4.0',
         'generated_at': datetime.now().isoformat(),
         'count': len(results),
         'diamond_count': diamond,
         'gold_count': gold,
         'silver_count': silver,
+        'short_ready_count': short_ready,
+        'short_watch_count': short_watch,
         'dart_count': dart_count,
         'kis_count': kis_count,
         'mcap_min': MCAP_MIN,
         'mcap_max': MCAP_MAX,
         'algorithm': {
-            'name': 'SIGVIEW VALUE v3.0 (완전체)',
-            'description': 'DART 재무 + KIS 외인/기관 + 조용한상승 + 스텔스 + 우선주 + 중소형',
-            'backtest': '텐배거 7/7 (100%) 조용한 상승 패턴 검증',
-            'categories': '펀더(20)+저평(20)+성장(15)+차트(15)+스텔스(30)+조용(20)+수급(20)+중소형(10)+우선주(20)',
+            'name': 'SIGVIEW VALUE v4.0 (장기+단기 레이어 분리)',
+            'description': 'VALUE_RANK (장기 가치주) + MOMENTUM_READY (단기 자리)',
+            'backtest': '텐배거 7/7 (100%) 조용한 상승 검증',
+            'long_categories': '펀더(20)+저평(20)+성장(15)+차트(15)+스텔스(30)+조용(20)+수급(20)+중소형(10)+우선주(20)',
+            'short_categories': 'CMF바닥+Elder+눌림+거래량회복+20MA수렴+압축+OBV+MACD - 과열감점',
         },
         'stocks': results,
         'data': data_dict,
