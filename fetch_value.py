@@ -496,9 +496,12 @@ def score_chart(df):
     events = []
     
     c = df['Close'].iloc[-1]
-    cmf = calc_cmf(df, 21)
     ma20 = df['Close'].rolling(20).mean()
+    ma60 = df['Close'].rolling(60).mean()
     vol_20 = df['Volume'].rolling(20).mean()
+    
+    # ★ v13: CMF 중복 제거 - chart에선 약하게만 사용
+    # (CMF는 stealth/quiet에서 강하게 평가)
     
     # (1) 60일 고점 -10~-30% (눌림) - 5점
     high_60 = df['High'].iloc[-60:].max()
@@ -508,16 +511,13 @@ def score_chart(df):
     elif -10 < drop_60 <= -5:
         score += 2
     
-    # (2) CMF 양수+상승 - 4점
-    cmf_now = cmf.iloc[-1] if not pd.isna(cmf.iloc[-1]) else 0
-    cmf_5d_ago = cmf.iloc[-5] if len(cmf) >= 5 and not pd.isna(cmf.iloc[-5]) else 0
-    
-    if cmf_now > 0 and cmf_now > cmf_5d_ago:
-        score += 4; events.append(f'CMF↑{cmf_now:.2f}')
-    elif cmf_now > 0:
-        score += 3; events.append(f'CMF+{cmf_now:.2f}')
-    elif cmf_now > cmf_5d_ago and cmf_5d_ago < 0:
-        score += 2; events.append('CMF회복')
+    # (2) 60일선 우상향 - 4점 (CMF 대체)
+    if not pd.isna(ma60.iloc[-1]) and not pd.isna(ma60.iloc[-30]):
+        ma60_slope = (ma60.iloc[-1] - ma60.iloc[-30]) / ma60.iloc[-30] * 100
+        if ma60_slope > 5:
+            score += 4; events.append(f'60MA우상향(+{ma60_slope:.0f}%)')
+        elif ma60_slope > 0:
+            score += 2; events.append('60MA양호')
     
     # (3) 거래량 감소 - 3점
     vol_5 = df['Volume'].iloc[-5:].mean()
@@ -538,8 +538,89 @@ def score_chart(df):
 
 
 # ============================================
-# 9단계: 🕵️ 스텔스 매집 (30점) - 핵심!
+# 🔥 NEW v13: 과열 종목 감점 (-30~0)
+# 5번: 거래량 폭증 제외 / 7번: +250% 감점
 # ============================================
+def score_overheat_penalty(df):
+    """
+    이미 너무 오른 / 폭증 종목 감점
+    
+    감점:
+    - 20일 내 5배 폭증 3회+ → -15
+    - 1년 +250% 이상 → -15
+    - 1년 +500% 이상 → -25 (확정 후행)
+    """
+    if len(df) < 60:
+        return 0, []
+    
+    penalty = 0
+    events = []
+    
+    # 1) 20일 거래량 폭증 횟수
+    vol_20 = df['Volume'].iloc[-20:]
+    vol_mean = vol_20.mean()
+    if vol_mean > 0:
+        spike_count = sum(1 for v in vol_20 if v > vol_mean * 5)
+        if spike_count >= 5:
+            penalty -= 15; events.append(f'🔥거래량폭증{spike_count}회')
+        elif spike_count >= 3:
+            penalty -= 10; events.append(f'폭증{spike_count}회주의')
+    
+    # 2) 1년 상승률 감점
+    if len(df) >= 240:
+        c_now = df['Close'].iloc[-1]
+        c_1y_ago = df['Close'].iloc[-240]
+        if c_1y_ago > 0:
+            yearly_change = (c_now - c_1y_ago) / c_1y_ago * 100
+            if yearly_change > 500:
+                penalty -= 25; events.append(f'🔥1년+{yearly_change:.0f}%(확정과열)')
+            elif yearly_change > 250:
+                penalty -= 15; events.append(f'1년+{yearly_change:.0f}%(과열주의)')
+            elif yearly_change > 150:
+                penalty -= 5; events.append(f'1년+{yearly_change:.0f}%')
+    
+    return penalty, events
+
+
+# ============================================
+# 🌱 NEW v13: 턴어라운드 가산 (0~10)
+# 9번: 적자 → 흑자전환 / 영익 YoY +100%+
+# ============================================
+def score_turnaround(financials):
+    """
+    적자→흑자 전환 또는 영익 폭증
+    
+    가산:
+    - 적자→흑자 전환 +6
+    - 영익 YoY +100%+ +4
+    """
+    if not financials or len(financials) < 5:
+        return 0, []
+    
+    score = 0
+    events = []
+    
+    # 적자→흑자 전환 (최근 vs 전년 동기)
+    op_now = financials[0].get('op_income')
+    op_yoy = financials[4].get('op_income')
+    
+    if op_now is not None and op_yoy is not None:
+        if op_yoy < 0 and op_now > 0:
+            score += 6; events.append('🚀흑자전환')
+        elif op_yoy > 0 and op_now > op_yoy * 2:
+            score += 4; events.append(f'영익폭증(+{(op_now/op_yoy-1)*100:.0f}%)')
+        elif op_yoy > 0 and op_now > op_yoy * 1.5:
+            score += 2; events.append('영익급증')
+    
+    # 순이익 흑자 전환
+    net_now = financials[0].get('net_income')
+    net_yoy = financials[4].get('net_income')
+    
+    if net_now is not None and net_yoy is not None:
+        if net_yoy < 0 and net_now > 0:
+            score += 4; events.append('순이익흑자전환')
+    
+    return min(score, 10), events
 def score_stealth_accumulation(df):
     if len(df) < 90:
         return 0, []
@@ -802,23 +883,28 @@ def score_smart_money(code, df):
 # ============================================
 def score_small_cap_bonus(mcap):
     """
-    시총 3천억~2조 = +10점
-    시총 2조~3조 = +6점
-    시총 3조~5조 = +3점
+    ★ v13 시총 세분화 (텐배거 핫존 ↑)
+    3천~8천억 = 10점 (텐배거 최적)
+    8천~1.5조 = 7점
+    1.5조~3조 = 4점
+    3조~5조 = 1점
     """
     score = 0
     events = []
     
     mcap_won = mcap if mcap > 1e11 else mcap * 1e8  # 단위 변환 안전장치
     
-    if 300_000_000_000 <= mcap_won < 2_000_000_000_000:
+    if 300_000_000_000 <= mcap_won < 800_000_000_000:
         score = 10
-        events.append('🌱중소형(텐배거최적)')
-    elif 2_000_000_000_000 <= mcap_won < 3_000_000_000_000:
-        score = 6
-        events.append('중형')
+        events.append('🌱텐배거핫존(3~8천억)')
+    elif 800_000_000_000 <= mcap_won < 1_500_000_000_000:
+        score = 7
+        events.append('중소형(8천~1.5조)')
+    elif 1_500_000_000_000 <= mcap_won < 3_000_000_000_000:
+        score = 4
+        events.append('중형(1.5~3조)')
     elif 3_000_000_000_000 <= mcap_won < 5_000_000_000_000:
-        score = 3
+        score = 1
         events.append('중대형')
     
     return score, events
@@ -1110,6 +1196,8 @@ def analyze_stock(code, info, all_price_data=None, skip_kis=False):
             s8, e8 = 0, []
             s9, e9 = 0, []
             st_score, st_events = 0, []
+            s_over, e_over = 0, []  # 과열 감점
+            s_turn, e_turn = 0, []  # 턴어라운드
         else:
             s2, e2 = score_valuation(financials, info['mcap'])
             s3, e3 = score_growth(financials)
@@ -1122,20 +1210,22 @@ def analyze_stock(code, info, all_price_data=None, skip_kis=False):
             
             s7, e7 = score_quiet_uptrend(df)
             
-            # ★ KIS는 2단계에서 별도 호출 (skip_kis=True면 0)
             s8, e8 = 0, []
             if not skip_kis:
                 try:
                     s8, e8 = score_smart_money(code, df)
                 except Exception:
-                    s8, e8 = 0, []  # KIS 실패해도 전체 진행
+                    s8, e8 = 0, []
             
             s9, e9 = score_small_cap_bonus(info['mcap'])
-            
-            # ★ NEW: 단기 모멘텀 점수 (30점)
             st_score, st_events = score_short_term(df)
+            
+            # ★ v13 NEW: 과열 감점 + 턴어라운드 가산
+            s_over, e_over = score_overheat_penalty(df)
+            s_turn, e_turn = score_turnaround(financials)
         
-        total = s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9
+        # ★ v13: total에 과열 감점 + 턴어라운드 가산 포함
+        total = s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s_over + s_turn
         
         has_dart_data = (s1 + s2 + s3) > 0
         is_pref_play = s6 >= 8
@@ -1211,7 +1301,9 @@ def analyze_stock(code, info, all_price_data=None, skip_kis=False):
                 'quiet': s7,
                 'smart_money': s8,
                 'small_cap': s9,
-                'short_term': st_score,      # ★ NEW
+                'short_term': st_score,
+                'overheat': s_over,       # ★ v13 NEW (음수)
+                'turnaround': s_turn,     # ★ v13 NEW
             },
             'events': {
                 'fundamentals': e1,
@@ -1223,7 +1315,9 @@ def analyze_stock(code, info, all_price_data=None, skip_kis=False):
                 'quiet': e7,
                 'smart_money': e8,
                 'small_cap': e9,
-                'short_term': st_events,     # ★ NEW
+                'short_term': st_events,
+                'overheat': e_over,       # ★ v13 NEW
+                'turnaround': e_turn,     # ★ v13 NEW
             },
             'chart_data': {
                 'cd': closes_d, 'cdt': dates_d,
@@ -1385,12 +1479,12 @@ def to_native(obj):
 def main():
     t0 = time.time()
     log("=" * 70)
-    log("SIGVIEW VALUE v5.0 - 속도 최적화 + 장기/단기 레이어")
-    log("✅ DART 부채비율 (yfinance 제거 - 속도 2배)")
-    log("✅ 1단계: 전체 615개 (워커 12개)")
-    log("✅ 2단계: 상위 150개만 KIS (워커 8개)")
+    log("SIGVIEW VALUE v6.0 - 정확도 최적화 (5개 알고리즘 추가)")
+    log("✅ CMF 중복 제거 (chart에서 빼고 stealth/quiet만)")
+    log("✅ 과열 감점 (거래량 폭증 + 1년 +250%+)")
+    log("✅ 턴어라운드 가산 (적자→흑자 / 영익 폭증)")
+    log("✅ 시총 세분화 (3~8천억 = 텐배거 핫존)")
     log("✅ 장기 점수 (150) + 🚀 단기 점수 (30) 분리")
-    log("✅ 텐배거 7/7 (100%) 조용한 상승 검증")
     log("💎 다이아 55%+ / 🥇 골드 42%+ / 🥈 실버 30%+")
     log("⏱️ 목표 시간: 25~30분")
     log("=" * 70)
@@ -1464,7 +1558,7 @@ def main():
     data_dict = {r['code']: r for r in results}
     output = {
         'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'version': 'v5.0',
+        'version': 'v6.0',
         'generated_at': datetime.now().isoformat(),
         'count': len(results),
         'diamond_count': diamond,
@@ -1477,12 +1571,12 @@ def main():
         'mcap_min': MCAP_MIN,
         'mcap_max': MCAP_MAX,
         'algorithm': {
-            'name': 'SIGVIEW VALUE v5.0 (속도 최적화 + 장기+단기 레이어)',
-            'description': 'VALUE_RANK (장기 가치주) + MOMENTUM_READY (단기 자리)',
+            'name': 'SIGVIEW VALUE v6.0 (정확도 최적화)',
+            'description': 'VALUE_RANK (장기) + MOMENTUM_READY (단기) + 과열감점 + 턴어라운드',
             'backtest': '텐배거 7/7 (100%) 조용한 상승 검증',
-            'long_categories': '펀더(20)+저평(20)+성장(15)+차트(15)+스텔스(30)+조용(20)+수급(20)+중소형(10)+우선주(20)',
+            'long_categories': '펀더(20)+저평(20)+성장(15)+차트(15)+스텔스(30)+조용(20)+수급(20)+중소형(10)+우선주(20)+턴어라운드(10) -과열감점(-25)',
             'short_categories': 'CMF바닥+Elder+눌림+거래량회복+20MA수렴+압축+OBV+MACD - 과열감점',
-            'speed_optimizations': 'DART 부채(yfinance 제거), 워커 12개, KIS 150개만',
+            'v13_improvements': 'CMF중복제거, 과열감점, 턴어라운드, 시총세분화',
         },
         'stocks': results,
         'data': data_dict,
