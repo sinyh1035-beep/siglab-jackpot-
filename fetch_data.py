@@ -1,38 +1,22 @@
 """
-SIGVIEW 잭팟 시즌1 v5.3 — 최종
+SIGVIEW 잭팟 시즌1 v5.0 — 힘 모으는 자리 (Power Buildup)
 ==========================================
-[베스트 = 진짜 눌림목 + 매집 자리]
-하드 컷:
-  ✅ MA60 추세 ≥ -8%, MA120 ≥ -10%
-  ✅ 20일선 -15% ~ +8%
-  ✅ 30일 고점대비 -35% ~ +5% (긴 눌림 OK)
-  ✅ HL 패턴 (저점 안 떨어짐)
-  ✅ range_10d ≤ 22% (긴 횡보 OK)
-  ✅ 거래대금 ≥ 10억
-  ✅ 거래량 폭증 ≤ 3배 (단순 기술적 반등 X)
+v4.9 → v5.0 변경:
+✅ PA 단기눌림 (5~10일) - 가장 안정 (승률 66%)
+✅ PB 중기눌림 (10~25일) - 중간
+✅ PC 장기눌림 (25~60일) - 잭팟 가능 (+148%, +271% 잡힘)
+✅ 너무 오른 거 컷: 60일 +40%, 120일 +80%
+✅ 추세 살아있어야: 120일선 -15% 이상, 60일 -15% 이상
+✅ 매집 신호: CMF 안정 OR CMF 저점→회복
+✅ 거래량 감소 + 캔들 안정 가산점
 
-점수 보너스:
-  ✅ 20일선 밀착 / NR4-NR7 / 박스권(30일) / 거래량 감소
-  ✅ CMF 회복 / CMF 양수 / CMF 안정
-  ✅ 60일 상승(+10~80%) / MA60 우상향
-  ✅ 자금 조용 (0.7~1.5x)
-
-점수 감점 (가짜 반등):
-  ❌ 자금 시끄러움 (>2.0x) -10점
-  ❌ CMF 급등락 반복 (≥6회) -10점
-  ❌ 60일 하락 -10점
-  ❌ MA120 단기 꺾임 -5점
-  ❌ CMF 너무 음수 -5점
-  ❌ 거래량 폭증 -5점
-
-[1순위/2순위 = v4.8 그대로]
-
-[검증]
-정답지 7종목 → 6개 매칭 (86%)
-점수 130점+ = 진짜 베스트 / 150점+ = 슈퍼
+baseline: v4.9 (거래대금 50억+, 시장방향, Elder Ray 유지)
 """
 
-import json, os, sys, time
+import json
+import os
+import sys
+import time
 from datetime import datetime
 from ftplib import FTP
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -55,11 +39,46 @@ FTP_TARGET_DIR = os.environ.get('FTP_TARGET_DIR', '/wp-content/data')
 
 THRESHOLD = 500_000_000_000
 OUTPUT_FILE = 'jackpot.json'
-MIN_AVG_VALUE_BEST = 1_000_000_000
+
+# v4.9 유지
+MIN_AVG_VALUE = 5_000_000_000  # 거래대금 20일 평균 50억
+MARKET_OK = {'KOSPI': True, 'KOSDAQ': True}
+
+# ★ v5.0 신규: 힘 모으는 자리 필터
+MAX_CHANGE_60D = 40       # 60일 +40% 초과 = 너무 오름 컷
+MAX_CHANGE_120D = 80      # 120일 +80% 초과 컷
+MIN_CHANGE_60D = -15      # 60일 -15% 이하 = 너무 빠짐 컷
+MIN_DIFF_MA120 = -15      # 120일선 -15% 이하 = 추세 무너짐 컷
+MAX_MA60_CHANGE = 35      # 60일선 +35% 이상 가파른 우상향 = 이미 많이 간 거
 
 
 def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+    ts = datetime.now().strftime('%H:%M:%S')
+    print(f"[{ts}] {msg}", flush=True)
+
+
+def check_market_direction():
+    """KOSPI/KOSDAQ가 120MA 위에 있는지 체크"""
+    log("Step 0: 시장 방향 체크 (KOSPI/KOSDAQ vs 120MA)...")
+    for symbol, name in [('^KS11', 'KOSPI'), ('^KQ11', 'KOSDAQ')]:
+        try:
+            idx = yf.download(symbol, period='1y', interval='1d',
+                             progress=False, auto_adjust=True)
+            if isinstance(idx.columns, pd.MultiIndex):
+                idx.columns = [c[0] for c in idx.columns]
+            idx = idx.dropna()
+            if len(idx) > 120:
+                current = idx['Close'].iloc[-1]
+                ma120 = idx['Close'].rolling(120).mean().iloc[-1]
+                is_above = current > ma120
+                MARKET_OK[name] = is_above
+                pct = (current - ma120) / ma120 * 100
+                status = "✅ 상승장" if is_above else "❌ 하락장"
+                log(f"  {name}: {current:,.0f} vs 120MA {ma120:,.0f} ({pct:+.1f}%) {status}")
+        except Exception as e:
+            log(f"  {name} 체크 실패: {e}, 일단 통과 처리")
+            MARKET_OK[name] = True
+    log(f"  → KOSPI: {'OK' if MARKET_OK['KOSPI'] else 'X'} / KOSDAQ: {'OK' if MARKET_OK['KOSDAQ'] else 'X'}")
 
 
 def get_stock_list():
@@ -93,8 +112,10 @@ def fetch_prices(stocks):
                 df = df.dropna()
                 if len(df) > 120:
                     all_data[row['Code']] = {
-                        'name': row['Name'], 'market': row['Market'],
-                        'mcap': int(row['Marcap']), 'df': df,
+                        'name': row['Name'],
+                        'market': row['Market'],
+                        'mcap': int(row['Marcap']),
+                        'df': df,
                         'closes': [int(round(c)) for c in df['Close'].tolist()],
                         'vols': [int(v) for v in df['Volume'].tolist()],
                         'dates': [d.strftime('%Y-%m-%d') for d in df.index],
@@ -109,23 +130,26 @@ def fetch_prices(stocks):
 
 
 def calc_cmf(df, period=21):
-    h, l, c, v = df['High'], df['Low'], df['Close'], df['Volume']
-    hl = (h - l).replace(0, 1e-9)
-    mfm = ((c - l) - (h - c)) / hl
-    mfv = mfm * v
-    return mfv.rolling(period).sum() / v.rolling(period).sum()
+    high, low, close, vol = df['High'], df['Low'], df['Close'], df['Volume']
+    hl_diff = (high - low).replace(0, 1e-9)
+    mfm = ((close - low) - (high - close)) / hl_diff
+    mfv = mfm * vol
+    return mfv.rolling(period).sum() / vol.rolling(period).sum()
 
 
 def is_hammer(o, h, l, c):
     if c <= o: return False
-    body = c - o; lower = o - l; upper = h - c
+    body = c - o
+    lower = o - l
+    upper = h - c
     return body > 0 and lower > body * 1.0 and upper < body * 0.8
 
 
-def analyze_signal_v53(df, market='KOSPI'):
-    """v5.3 - 진짜 눌림목 + 매집 자리"""
-    if len(df) < 120: return None
-    
+def analyze_signal_v50(df, market='KOSPI'):
+    """v5.0 - 힘 모으는 자리 (PA 단기 / PB 중기 / PC 장기 눌림)"""
+    if len(df) < 120:
+        return None
+
     cmf = calc_cmf(df, 21)
     ma20 = df['Close'].rolling(20).mean()
     ma60 = df['Close'].rolling(60).mean()
@@ -134,287 +158,273 @@ def analyze_signal_v53(df, market='KOSPI'):
     bb_lower = ma20 - 2 * bb_std
     bb_upper = ma20 + 2 * bb_std
     vol_20 = df['Volume'].rolling(20).mean()
-    
+
+    # 거래대금
     value_series = df['Close'] * df['Volume']
     avg_value_20d = value_series.rolling(20).mean()
-    
+
+    # Elder Ray
+    ema13 = df['Close'].ewm(span=13, adjust=False).mean()
+    bull_power = df['High'] - ema13
+    bear_power = df['Low'] - ema13
+
     i = len(df) - 1
     row = df.iloc[i]
     c = row['Close']
-    
+
     if pd.isna(ma20.iloc[i]) or pd.isna(ma60.iloc[i]) or pd.isna(ma120.iloc[i]):
         return None
-    
-    # 기본 지표
+
+    # 기본 이격도
     diff_ma20 = (c - ma20.iloc[i]) / ma20.iloc[i] * 100
     diff_ma60 = (c - ma60.iloc[i]) / ma60.iloc[i] * 100
     diff_ma120 = (c - ma120.iloc[i]) / ma120.iloc[i] * 100
-    
+
+    # 주가 변화
     past_60d = df['Close'].iloc[max(0, i-60)]
     change_60d = (c - past_60d) / past_60d * 100
+    past_120d = df['Close'].iloc[max(0, i-120)]
+    change_120d = (c - past_120d) / past_120d * 100
     past_10d = df['Close'].iloc[max(0, i-10)]
     change_10d = (c - past_10d) / past_10d * 100
-    
+
+    # CMF
     cmf_now = cmf.iloc[i]
     cmf_5d_ago = cmf.iloc[max(0, i-5)]
     cmf_10d_ago = cmf.iloc[max(0, i-10)]
     cmf_20d_ago = cmf.iloc[max(0, i-20)]
+    cmf_min_20d = cmf.iloc[max(0, i-20):i+1].min()
+
     cmf_rising = not pd.isna(cmf_5d_ago) and cmf_now > cmf_5d_ago
     cmf_change_10d = float(cmf_now - cmf_10d_ago) if not pd.isna(cmf_10d_ago) else 0
     cmf_change_20d = float(cmf_now - cmf_20d_ago) if not pd.isna(cmf_20d_ago) else 0
-    
-    # CMF 매집 신호 (v5.3 핵심)
-    cmf_min_20d = cmf.iloc[max(0, i-20):i+1].min()
-    cmf_recovery = cmf_now - cmf_min_20d if not pd.isna(cmf_min_20d) else 0
-    cmf_30d = cmf.iloc[max(0, i-30):i+1].dropna().values
-    cmf_signs = np.sign(cmf_30d)
-    cmf_flips = int(np.sum(np.diff(cmf_signs) != 0)) if len(cmf_signs) > 1 else 0
-    
-    # MA 추세
+
+    # ★ v5.0 핵심: CMF 매집 신호
+    cmf_holding = cmf_now >= -0.1
+    cmf_recovering = (not pd.isna(cmf_min_20d)) and (cmf_min_20d <= -0.05) and (cmf_now > cmf_min_20d + 0.1)
+    accumulation = cmf_holding or cmf_recovering
+
+    # 60일선 우상향
     ma60_change = 0
     if i >= 60 and not pd.isna(ma60.iloc[i-60]) and ma60.iloc[i-60] > 0:
         ma60_change = (ma60.iloc[i] - ma60.iloc[i-60]) / ma60.iloc[i-60] * 100
+
     ma120_change = 0
     if i >= 60 and not pd.isna(ma120.iloc[i-60]) and ma120.iloc[i-60] > 0:
         ma120_change = (ma120.iloc[i] - ma120.iloc[i-60]) / ma120.iloc[i-60] * 100
-    ma120_recent = 0
-    if i >= 20 and not pd.isna(ma120.iloc[i-20]) and ma120.iloc[i-20] > 0:
-        ma120_recent = (ma120.iloc[i] - ma120.iloc[i-20]) / ma120.iloc[i-20] * 100
-    
-    # 고점 대비
+
+    # ★ v5.0 핵심: 60일 고점까지 며칠 전인지 (눌림 기간)
+    high_60d_window = df['High'].iloc[max(0, i-60):i+1]
+    high_60d_max = float(high_60d_window.max())
+    high_pos = high_60d_window.values.argmax()
+    days_since_high = (len(high_60d_window) - 1) - int(high_pos)
+    drop_from_high_60d = (c - high_60d_max) / high_60d_max * 100
+
+    # 30일 고점 (기존 유지)
     high_30d = df['High'].iloc[max(0, i-30):i+1].max()
     drop_from_high_30d = (c - high_30d) / high_30d * 100
-    
-    # 변동폭 (v5.3 핵심: range_5d, range_10d, range_30d)
-    rec_h_5 = df['High'].iloc[max(0, i-5):i+1].max()
-    rec_l_5 = df['Low'].iloc[max(0, i-5):i+1].min()
-    range_5d = (rec_h_5 - rec_l_5) / rec_l_5 * 100
-    
-    rec_h_10 = df['High'].iloc[max(0, i-10):i+1].max()
-    rec_l_10v = df['Low'].iloc[max(0, i-10):i+1].min()
-    range_10d = (rec_h_10 - rec_l_10v) / rec_l_10v * 100
-    
-    rec_h_20 = df['High'].iloc[max(0, i-20):i+1].max()
-    rec_l_20 = df['Low'].iloc[max(0, i-20):i+1].min()
-    range_20d = (rec_h_20 - rec_l_20) / rec_l_20 * 100
-    
-    rec_h_30 = df['High'].iloc[max(0, i-30):i+1].max()
-    rec_l_30 = df['Low'].iloc[max(0, i-30):i+1].min()
-    range_30d = (rec_h_30 - rec_l_30) / rec_l_30 * 100
-    
-    # HL (저점 안 떨어짐, 7% 허용)
+
+    # 20일 변동폭
+    recent_20_high = df['High'].iloc[max(0, i-20):i+1].max()
+    recent_20_low = df['Low'].iloc[max(0, i-20):i+1].min()
+    range_20d = (recent_20_high - recent_20_low) / recent_20_low * 100
+
+    # HL 패턴
     recent_10_low = df['Low'].iloc[max(0, i-10):i+1].min()
-    prev_20_low = df['Low'].iloc[max(0, i-30):max(0, i-10)].min() if i >= 30 else recent_10_low
-    is_higher_low = recent_10_low >= prev_20_low * 0.93
-    
+    prev_low = df['Low'].iloc[max(0, i-30):max(0, i-10)].min() if i >= 30 else recent_10_low
+    is_higher_low = recent_10_low > prev_low * 0.95
+
     # 망치
     has_hammer = False
     for j in range(max(0, i-3), i+1):
         if is_hammer(df['Open'].iloc[j], df['High'].iloc[j],
                      df['Low'].iloc[j], df['Close'].iloc[j]):
-            has_hammer = True; break
-    
+            has_hammer = True
+            break
+
     vol_ratio = row['Volume'] / vol_20.iloc[i] if vol_20.iloc[i] > 0 else 0
+
+    # 거래대금
     current_avg_value = avg_value_20d.iloc[i] if not pd.isna(avg_value_20d.iloc[i]) else 0
-    
-    # 거래량 5일/20일 비율
-    recent_5_vol_avg = df['Volume'].iloc[max(0, i-5):i+1].mean()
-    vol_decreasing = recent_5_vol_avg < vol_20.iloc[i] * 0.85 if vol_20.iloc[i] > 0 else False
-    
-    # 거래량 폭증 (가짜 반등 컷)
-    vol_recent_3 = df['Volume'].iloc[max(0, i-3):i+1].mean()
-    vol_excess = vol_recent_3 / vol_20.iloc[i] if vol_20.iloc[i] > 0 else 1
-    
-    # 자금 흐름 (5일 평균 vs 20일 평균)
-    value_5 = value_series.iloc[max(0, i-5):i+1].mean()
-    value_20 = value_series.iloc[max(0, i-20):i+1].mean()
-    value_ratio = value_5 / value_20 if value_20 > 0 else 1
-    
-    # NR4/NR7 (변동성 압축)
-    ranges = (df['High'] - df['Low']).iloc[max(0, i-7):i+1]
-    today_range = ranges.iloc[-1] if len(ranges) > 0 else 0
-    nr4 = bool(today_range == ranges.iloc[-4:].min()) if len(ranges) >= 4 else False
-    nr7 = bool(today_range == ranges.iloc[-7:].min()) if len(ranges) >= 7 else False
-    
-    # 볼밴
+    has_liquidity = current_avg_value >= MIN_AVG_VALUE
+
+    # ★ v5.0: 거래량 감소 (조정 끝나가는 신호)
+    vol_5_recent = df['Volume'].iloc[max(0, i-5):i+1].mean()
+    vol_decreasing = vol_5_recent < vol_20.iloc[i] * 0.95 if vol_20.iloc[i] > 0 else False
+
+    # ★ v5.0: 캔들 안정성 (최근 5일 변동성)
+    recent_5_high = df['High'].iloc[max(0, i-5):i+1].max()
+    recent_5_low = df['Low'].iloc[max(0, i-5):i+1].min()
+    range_5d = (recent_5_high - recent_5_low) / recent_5_low * 100 if recent_5_low > 0 else 100
+    candle_stable = range_5d < 10
+
+    # Elder Ray
+    bull_now = bull_power.iloc[i] if not pd.isna(bull_power.iloc[i]) else 0
+    bear_now = bear_power.iloc[i] if not pd.isna(bear_power.iloc[i]) else 0
+    bull_5d_ago = bull_power.iloc[max(0, i-5)] if not pd.isna(bull_power.iloc[max(0, i-5)]) else 0
+    bear_5d_ago = bear_power.iloc[max(0, i-5)] if not pd.isna(bear_power.iloc[max(0, i-5)]) else 0
+    elder_recovering = bull_now > 0 and bear_now > bear_5d_ago
+    elder_strong = bull_now > bull_5d_ago and bull_now > 0
+
+    # 시장 방향
+    market_ok = MARKET_OK.get(market, True)
+
+    # 볼밴 위치
     bb_low_now = bb_lower.iloc[i]
     bb_up_now = bb_upper.iloc[i]
     bb_position = 50
     if not pd.isna(bb_low_now) and not pd.isna(bb_up_now) and bb_up_now > bb_low_now:
         bb_position = (c - bb_low_now) / (bb_up_now - bb_low_now) * 100
         bb_position = max(0, min(100, bb_position))
-    
+
     # ============================================
-    # ★★★ v5.3 Tier 판정
+    # ★★★ v5.0 Tier 판정
     # ============================================
     tier = 4
     pattern = ''
-    
-    # 🌟 베스트 (Tier 0)
-    is_best = (
-        ma60_change >= -8 and
-        ma120_change >= -10 and
-        -15 <= diff_ma20 <= 8 and
-        -35 <= drop_from_high_30d <= 5 and
-        is_higher_low and
-        range_10d <= 22 and
-        current_avg_value >= MIN_AVG_VALUE_BEST and
-        vol_excess <= 3.0
-    )
-    
-    if is_best:
-        tier = 0
-        pattern = 'BEST'
-    else:
-        # 1순위/2순위 = v4.8 그대로
-        is_uptrend_basic = (5 <= change_60d <= 150 and diff_ma120 >= -10)
-        if is_uptrend_basic:
-            if -15 <= diff_ma20 <= 10 and cmf_now >= -0.05:
-                tier = 1
-            elif -25 <= diff_ma20 <= -5 and -0.2 <= cmf_now <= 0.1:
-                tier = 2
-    
+    events = []
+    score = 0
+
+    # 공통 컷: 너무 오른 거 / 너무 빠진 거 / 추세 무너진 거 / 거래대금 / 시장
+    overshoot = change_60d > MAX_CHANGE_60D or change_120d > MAX_CHANGE_120D or ma60_change > MAX_MA60_CHANGE
+    trend_broken = change_60d < MIN_CHANGE_60D or diff_ma120 < MIN_DIFF_MA120
+    basic_ok = has_liquidity and market_ok and not overshoot and not trend_broken
+
+    if basic_ok and accumulation:
+        # PA 단기 눌림 (5~10일)
+        if 5 <= days_since_high <= 10:
+            if -12 <= drop_from_high_60d <= -3 and -7 <= diff_ma20 <= 3:
+                tier = 0
+                pattern = 'A'
+
+        # PB 중기 눌림 (10~25일)
+        elif 10 < days_since_high <= 25:
+            if -18 <= drop_from_high_60d <= -5 and -12 <= diff_ma20 <= 3:
+                tier = 0
+                pattern = 'B'
+
+        # PC 장기 눌림 (25~60일) - CMF 회복 필수 (잭팟 자리)
+        elif 25 < days_since_high <= 60:
+            if -25 <= drop_from_high_60d <= -5 and -15 <= diff_ma60 <= 5 and cmf_recovering:
+                tier = 0
+                pattern = 'C'
+
+    # Tier 1: 베스트는 아니지만 매집 + 조정 중 (1순위)
+    if tier != 0 and basic_ok and accumulation:
+        if -15 <= diff_ma20 <= 5 and cmf_now >= -0.05:
+            tier = 1
+
+    # Tier 2: 약한 조건 (2순위)
+    if tier == 4 and basic_ok:
+        if -20 <= diff_ma20 <= 5 and cmf_now >= -0.15:
+            tier = 2
+
     # ============================================
     # 점수 계산
     # ============================================
-    score = 0
-    events = []
-    
     if tier == 0:
-        # ★★★ v5.3 베스트 점수 (가짜 반등 감점 포함)
-        score = 50
-        events.append('🎯 눌림목/매집')
-        
-        # 20일선 위치
-        if -3 <= diff_ma20 <= 3:
-            score += 20; events.append('20일선밀착')
-        elif -7 <= diff_ma20 <= 5:
-            score += 15; events.append('20일선근접')
-        
-        # 압축 (5일/10일)
-        if range_5d <= 5:
-            score += 20; events.append('극압축')
-        elif range_5d <= 8:
-            score += 15; events.append('압축')
-        elif range_10d <= 12:
-            score += 10; events.append('타이트')
-        
-        # 박스권 (30일)
-        if range_30d <= 20:
-            score += 15; events.append('박스권')
-        elif range_30d <= 30:
-            score += 10; events.append('완만박스')
-        
-        # NR4/NR7
-        if nr7:
-            score += 15; events.append('NR7')
-        elif nr4:
-            score += 8; events.append('NR4')
-        
-        # 거래량 감소 (관심 빠짐)
-        if vol_decreasing:
-            score += 10; events.append('거래량감소')
-        
-        # 자금 흐름 (조용 = +, 시끄러움 = -)
-        if 0.7 <= value_ratio <= 1.5:
-            score += 10; events.append('자금조용')
-        elif value_ratio > 2.0:
-            score -= 10; events.append('자금시끄러움⚠')
-        
-        # MA60 추세
-        if ma60_change > 15:
-            score += 15; events.append('강한우상향')
-        elif ma60_change > 5:
-            score += 10; events.append('우상향')
-        elif ma60_change > 0:
-            score += 5; events.append('완만우상향')
-        
-        # MA120 단기 (NEW - 가짜 반등 감지)
-        if ma120_recent > 0:
-            score += 5
-        elif ma120_recent < -3:
-            score -= 5; events.append('MA120꺾임⚠')
-        
-        # CMF 회복 (매집)
-        if cmf_recovery >= 0.2:
-            score += 15; events.append('CMF강매집')
-        elif cmf_recovery >= 0.1:
-            score += 10; events.append('CMF매집')
-        
-        # CMF 양수
+        # 패턴별 베이스 점수
+        if pattern == 'A':
+            score = 50
+            events.append('🎯PA단기눌림')
+        elif pattern == 'B':
+            score = 45
+            events.append('📐PB중기눌림')
+        elif pattern == 'C':
+            score = 55
+            events.append('🎰PC장기눌림')
+
+        # 매집 가산점
+        if cmf_recovering:
+            score += 15
+            events.append('CMF회복')
         if cmf_now > 0.05:
-            score += 10; events.append('CMF양수')
-        elif cmf_now > 0:
+            score += 10
+            events.append('CMF양수')
+        if cmf_rising:
             score += 5
-        elif cmf_now < -0.20:
-            score -= 5; events.append('CMF음수⚠')
-        
-        # CMF 안정 (전환 횟수)
-        if cmf_flips <= 3:
+            events.append('CMF상승')
+
+        # 거래량 감소 (조정 끝나가는 신호)
+        if vol_decreasing:
+            score += 10
+            events.append('거래량감소')
+
+        # 캔들 안정성
+        if candle_stable:
             score += 5
-        elif cmf_flips >= 6:
-            score -= 10; events.append('CMF급등락⚠')
-        
-        # 60일 상승 (먼저 상승했어야 함)
-        if 10 <= change_60d <= 80:
-            score += 10; events.append('60일상승')
-        elif change_60d > 80:
-            score += 5
-        elif change_60d < 0:
-            score -= 10; events.append('60일하락⚠')
-        
-        # 거래량 폭증 감점
-        if vol_excess > 2.0:
-            score -= 5; events.append('거래량폭증⚠')
-        
-        # HL 보너스
+            events.append('캔들안정')
+
+        # HL 패턴
         if is_higher_low:
+            score += 10
             events.append('HL패턴')
-        
+
         # 망치
         if has_hammer:
-            score += 5; events.append('망치')
-    
-    elif tier in (1, 2):
-        # 1/2순위 v4.8 그대로
+            score += 10
+            events.append('망치')
+
+        # 거래대금 (대형거래)
+        if current_avg_value >= 10_000_000_000:
+            score += 5
+            events.append('대형거래')
+
+        # Elder Ray
+        if elder_strong:
+            score += 5
+            events.append('Bull강세')
+        elif elder_recovering:
+            score += 3
+            events.append('Bull회복')
+
+        # 60일선 우상향 (적당히)
+        if 5 <= ma60_change <= 20:
+            score += 5
+            events.append('60일선우상향')
+
+    elif tier == 1:
         score = 30
         if cmf_now > 0.05:
-            score += 20; events.append('CMF양수')
+            score += 15; events.append('CMF양수')
         elif cmf_now >= -0.05:
-            score += 10; events.append('CMF중립')
+            score += 8; events.append('CMF중립')
         if cmf_rising:
-            score += 15; events.append('CMF상승')
-        
-        if -5 <= diff_ma20 <= 0:
-            score += 15; events.append('20일선눌림')
-        elif 0 < diff_ma20 <= 5:
+            score += 10; events.append('CMF상승')
+        if -7 <= diff_ma20 <= 3:
             score += 10; events.append('20일선근접')
-        elif -10 <= diff_ma20 < -5:
-            score += 12; events.append('20일선아래')
-        elif -25 <= diff_ma20 < -10:
-            score += 8; events.append('20일선깊은조정')
-        
         if has_hammer:
-            score += 15; events.append('망치')
-        if change_60d >= 30:
-            score += 10; events.append('강한우상향')
-        elif change_60d >= 15:
-            score += 5; events.append('우상향')
-        if -40 <= drop_from_high_30d <= -5:
-            score += 15; events.append('조정')
-        if vol_ratio >= 1.5:
-            score += 10; events.append('거래량')
-    
+            score += 10; events.append('망치')
+        if is_higher_low:
+            score += 5; events.append('HL패턴')
+        if vol_decreasing:
+            score += 5; events.append('거래량감소')
+
+    elif tier == 2:
+        score = 20
+        if cmf_now > 0:
+            score += 10; events.append('CMF양수')
+        if has_hammer:
+            score += 5; events.append('망치')
+
+    elif tier == 4:
+        # 너무 오른 거 / 추세 무너진 거 표시
+        if overshoot:
+            events.append('과열')
+        if trend_broken:
+            events.append('추세무너짐')
+        if not has_liquidity:
+            events.append('저거래')
+
     return {
         'tier': tier, 'pattern': pattern, 'score': score, 'events': events,
         'price': float(c),
         'cmf': float(cmf_now),
-        'cmf_rising': bool(cmf_rising),
-        'cmf_recovery': round(float(cmf_recovery), 3),
+        'cmf_rising': cmf_rising,
         'cmf_change_10d': round(cmf_change_10d, 3),
         'cmf_change_20d': round(cmf_change_20d, 3),
-        'cmf_min_20d': round(float(cmf_min_20d), 3) if not pd.isna(cmf_min_20d) else 0,
-        'cmf_flips': cmf_flips,
+        'cmf_recovering': cmf_recovering,
+        'cmf_min_20d': float(cmf_min_20d) if not pd.isna(cmf_min_20d) else 0,
         'ma20': float(ma20.iloc[i]),
         'ma60': float(ma60.iloc[i]),
         'ma120': float(ma120.iloc[i]),
@@ -423,25 +433,27 @@ def analyze_signal_v53(df, market='KOSPI'):
         'diff_ma120': round(diff_ma120, 1),
         'ma60_change': round(ma60_change, 1),
         'ma120_change': round(ma120_change, 1),
-        'ma120_recent': round(ma120_recent, 1),
         'change_60d': round(change_60d, 1),
+        'change_120d': round(change_120d, 1),
         'change_10d': round(change_10d, 1),
         'drop_from_high_30d': round(drop_from_high_30d, 1),
-        'range_5d': round(range_5d, 1),
-        'range_10d': round(range_10d, 1),
+        'drop_from_high_60d': round(drop_from_high_60d, 1),
+        'days_since_high': int(days_since_high),
         'range_20d': round(range_20d, 1),
-        'range_30d': round(range_30d, 1),
-        'is_higher_low': bool(is_higher_low),
+        'range_5d': round(range_5d, 1),
+        'is_higher_low': is_higher_low,
+        'candle_stable': candle_stable,
         'bb_position': round(bb_position, 1),
         'bb_lower': float(bb_low_now) if not pd.isna(bb_low_now) else None,
         'bb_upper': float(bb_up_now) if not pd.isna(bb_up_now) else None,
-        'has_hammer': bool(has_hammer),
+        'has_hammer': has_hammer,
         'vol_ratio': round(vol_ratio, 2),
-        'vol_excess': round(vol_excess, 2),
-        'vol_decreasing': bool(vol_decreasing),
-        'value_ratio': round(value_ratio, 2),
-        'nr4': nr4, 'nr7': nr7,
         'avg_value_20d': int(current_avg_value),
+        'bull_power': float(bull_now),
+        'bear_power': float(bear_now),
+        'elder_recovering': elder_recovering,
+        'elder_strong': elder_strong,
+        'vol_decreasing': vol_decreasing,
     }
 
 
@@ -481,11 +493,13 @@ def extract_chart_data_v37(closes, vols, dates):
 
 def analyze_stock(code, info):
     df = info['df']
-    if df is None or len(df) < 120: return None
+    if df is None or len(df) < 120:
+        return None
     try:
-        sig = analyze_signal_v53(df, market=info['market'])
-        if not sig: return None
-        
+        sig = analyze_signal_v50(df, market=info['market'])
+        if not sig:
+            return None
+
         chart = extract_chart_data_v37(info['closes'], info['vols'], info['dates'])
         closes = info['closes']
         d_stage = cubic_stage_v37(closes[-120:] if len(closes) >= 120 else closes)
@@ -494,17 +508,26 @@ def analyze_stock(code, info):
         m_closes = df_ts.resample('ME').last().dropna()['c'].tolist()
         w_stage = cubic_stage_v37(w_closes[-80:] if len(w_closes) >= 80 else w_closes)
         m_stage = cubic_stage_v37(m_closes)
-        
+
         if sig['tier'] == 0:
-            if sig['score'] >= 150: verdict = '🌟 슈퍼 베스트'
-            elif sig['score'] >= 130: verdict = '🌟 베스트 (강)'
-            else: verdict = '🌟 베스트'
-        elif sig['tier'] == 1: verdict = '🟢 1순위 매수'
-        elif sig['tier'] == 2: verdict = '🟡 2순위 매수'
-        else: verdict = '⚪ 관찰'
-        
+            if sig['pattern'] == 'A':
+                verdict = f'🎯 PA 단기눌림 ({sig["days_since_high"]}일전 고점)'
+            elif sig['pattern'] == 'B':
+                verdict = f'📐 PB 중기눌림 ({sig["days_since_high"]}일전 고점)'
+            elif sig['pattern'] == 'C':
+                verdict = f'🎰 PC 장기눌림 ({sig["days_since_high"]}일전 고점) ★잭팟'
+            else:
+                verdict = '🌟 베스트'
+        elif sig['tier'] == 1:
+            verdict = '🟢 1순위'
+        elif sig['tier'] == 2:
+            verdict = '🟡 2순위'
+        else:
+            verdict = '⚪ 관찰'
+
         return {
-            'code': code, 'n': info['name'], 'm': info['market'],
+            'code': code,
+            'n': info['name'], 'm': info['market'],
             'mc': round(info['mcap'] / 1e8), 'p': sig['price'],
             't': sig['score'], 'j': sig['score'],
             'h': int(max(closes)), 'l': int(min(closes)),
@@ -518,37 +541,49 @@ def analyze_stock(code, info):
             'stock_3y': 0, 'kospi_3y': 0, 'macro_gap': 0,
             'ta': 50, 'is_turnaround': False,
             'golden_2001': False, 'golden_multi': None,
-            'name': info['name'], 'market': info['market'],
+            'name': info['name'],
+            'market': info['market'],
             'mcap': int(info['mcap'] / 1e8),
-            'tier': sig['tier'], 'pattern': sig['pattern'],
-            'verdict': verdict, 'score': sig['score'], 'events': sig['events'],
+            'tier': sig['tier'],
+            'pattern': sig['pattern'],
+            'verdict': verdict,
+            'score': sig['score'],
+            'events': sig['events'],
             'price': sig['price'],
             'cmf': round(sig['cmf'], 3),
             'cmf_rising': sig['cmf_rising'],
-            'cmf_recovery': sig['cmf_recovery'],
-            'cmf_min_20d': sig['cmf_min_20d'],
-            'cmf_flips': sig['cmf_flips'],
             'cmf_change_10d': sig['cmf_change_10d'],
             'cmf_change_20d': sig['cmf_change_20d'],
-            'ma20': round(sig['ma20']), 'ma60': round(sig['ma60']), 'ma120': round(sig['ma120']),
-            'diff_ma20': sig['diff_ma20'], 'diff_ma60': sig['diff_ma60'], 'diff_ma120': sig['diff_ma120'],
-            'ma60_change': sig['ma60_change'], 'ma120_change': sig['ma120_change'],
-            'ma120_recent': sig['ma120_recent'],
-            'change_60d': sig['change_60d'], 'change_10d': sig['change_10d'],
+            'cmf_recovering': sig['cmf_recovering'],
+            'ma20': round(sig['ma20']),
+            'ma60': round(sig['ma60']),
+            'ma120': round(sig['ma120']),
+            'diff_ma20': sig['diff_ma20'],
+            'diff_ma60': sig['diff_ma60'],
+            'diff_ma120': sig['diff_ma120'],
+            'ma60_change': sig['ma60_change'],
+            'ma120_change': sig['ma120_change'],
+            'change_60d': sig['change_60d'],
+            'change_120d': sig['change_120d'],
+            'change_10d': sig['change_10d'],
             'drop_from_high_30d': sig['drop_from_high_30d'],
-            'range_5d': sig['range_5d'], 'range_10d': sig['range_10d'],
-            'range_20d': sig['range_20d'], 'range_30d': sig['range_30d'],
+            'drop_from_high_60d': sig['drop_from_high_60d'],
+            'days_since_high': sig['days_since_high'],
+            'range_20d': sig['range_20d'],
+            'range_5d': sig['range_5d'],
             'is_higher_low': sig['is_higher_low'],
+            'candle_stable': sig['candle_stable'],
             'bb_position': sig['bb_position'],
             'bb_lower': round(sig['bb_lower']) if sig['bb_lower'] else None,
             'bb_upper': round(sig['bb_upper']) if sig['bb_upper'] else None,
             'has_hammer': sig['has_hammer'],
             'vol_ratio': sig['vol_ratio'],
-            'vol_excess': sig['vol_excess'],
-            'vol_decreasing': sig['vol_decreasing'],
-            'value_ratio': sig['value_ratio'],
-            'nr4': sig['nr4'], 'nr7': sig['nr7'],
             'avg_value_20d': sig['avg_value_20d'],
+            'bull_power': round(sig['bull_power'], 2),
+            'bear_power': round(sig['bear_power'], 2),
+            'elder_recovering': sig['elder_recovering'],
+            'elder_strong': sig['elder_strong'],
+            'vol_decreasing': sig['vol_decreasing'],
         }
     except Exception:
         return None
@@ -558,12 +593,14 @@ def analyze_all_parallel(price_data):
     log(f"Step 3: 전체 종목 분석 ({len(price_data)}개)...")
     t0 = time.time()
     results = []
-    
+
     def task(item):
         code, info = item
-        try: return analyze_stock(code, info)
-        except Exception: return None
-    
+        try:
+            return analyze_stock(code, info)
+        except Exception:
+            return None
+
     items = list(price_data.items())
     completed = 0
     with ThreadPoolExecutor(max_workers=8) as exe:
@@ -575,25 +612,29 @@ def analyze_all_parallel(price_data):
                 if r:
                     results.append(r)
                     if r['tier'] <= 2:
-                        tier_emoji = ['🌟','🟢','🟡'][r['tier']]
-                        log(f"  [{completed}] {tier_emoji} {r['name']} {r['score']}점 ({','.join(r['events'][:4])})")
+                        tier_emoji = ['🌟', '🟢', '🟡'][r['tier']]
+                        log(f"  [{completed}] {tier_emoji} {r['name']} {r['score']}점 ({r['verdict']}, {','.join(r['events'][:4])})")
                 if completed % 100 == 0:
                     log(f"  ... {completed}/{len(items)} (총 {len(results)}개)")
             except Exception:
                 pass
+
     log(f"  → {len(results)}개 ({time.time()-t0:.0f}초)")
     return results
 
 
 def upload_to_gabia():
-    if not all([FTP_HOST, FTP_USER, FTP_PASS]): return False
+    if not all([FTP_HOST, FTP_USER, FTP_PASS]):
+        return False
     try:
         ftp = FTP(FTP_HOST, timeout=30)
         ftp.login(FTP_USER, FTP_PASS)
         for part in FTP_TARGET_DIR.strip('/').split('/'):
-            try: ftp.cwd(part)
+            try:
+                ftp.cwd(part)
             except Exception:
-                ftp.mkd(part); ftp.cwd(part)
+                ftp.mkd(part)
+                ftp.cwd(part)
         with open(OUTPUT_FILE, 'rb') as f:
             ftp.storbinary(f'STOR {OUTPUT_FILE}', f)
         ftp.quit()
@@ -620,58 +661,68 @@ def to_native(obj):
 def main():
     t0 = time.time()
     log("=" * 70)
-    log("SIGVIEW 잭팟 시즌1 v5.3 - 진짜 눌림목/매집 자리!!")
-    log("🌟 베스트 = 20일선 + HL + 압축 + CMF 매집 (가짜 반등 컷)")
-    log("🟢 1순위 / 🟡 2순위 (v4.8 그대로)")
+    log("SIGVIEW 잭팟 시즌1 v5.0 - 힘 모으는 자리 (Power Buildup)")
+    log("🎯 PA 단기눌림 / 📐 PB 중기눌림 / 🎰 PC 장기눌림(잭팟)")
+    log("🟢 1순위 / 🟡 2순위 / ⚪ 관찰")
     log("=" * 70)
-    
+
+    check_market_direction()
+
     stocks = get_stock_list()
     if len(stocks) == 0: return
     price_data = fetch_prices(stocks)
     if not price_data: return
-    
+
     results = analyze_all_parallel(price_data)
     results.sort(key=lambda x: (x['tier'], -x['score'], -x['mcap']))
-    for i, r in enumerate(results, 1): r['rank'] = i
-    
+    for i, r in enumerate(results, 1):
+        r['rank'] = i
+
     tier0 = sum(1 for r in results if r['tier'] == 0)
-    tier0_super = sum(1 for r in results if r['tier'] == 0 and r['score'] >= 150)
-    tier0_strong = sum(1 for r in results if r['tier'] == 0 and 130 <= r['score'] < 150)
+    tier0_a = sum(1 for r in results if r['tier'] == 0 and r['pattern'] == 'A')
+    tier0_b = sum(1 for r in results if r['tier'] == 0 and r['pattern'] == 'B')
+    tier0_c = sum(1 for r in results if r['tier'] == 0 and r['pattern'] == 'C')
     tier1 = sum(1 for r in results if r['tier'] == 1)
     tier2 = sum(1 for r in results if r['tier'] == 2)
     tier4 = sum(1 for r in results if r['tier'] == 4)
-    
+
     log(f"\n[결과]")
-    log(f"  🌟 베스트: {tier0}개 (슈퍼 150+ {tier0_super}, 강 130~149 {tier0_strong})")
+    log(f"  🌟 베스트: {tier0}개 (PA{tier0_a} / PB{tier0_b} / PC{tier0_c})")
     log(f"  🟢 1순위: {tier1}개")
     log(f"  🟡 2순위: {tier2}개")
     log(f"  ⚪ 관찰: {tier4}개")
     log(f"  총 {len(results)}개 ({time.time()-t0:.0f}초)")
-    
+
     data_dict = {r['code']: r for r in results}
-    
+
     output = {
         'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'version': 'v5.3', 'season': 1, 'algo_version': '5.3',
+        'version': 'v5.0', 'season': 1, 'algo_version': '5.0',
         'generated_at': datetime.now().isoformat(),
-        'count': len(results), 'n_scanned': len(price_data),
+        'count': len(results),
+        'n_scanned': len(price_data),
         'n_signals': tier0 + tier1 + tier2,
         'tier0_count': tier0,
-        'tier0_super_count': tier0_super,
-        'tier0_strong_count': tier0_strong,
-        'tier1_count': tier1, 'tier2_count': tier2, 'tier4_count': tier4,
+        'tier0_a_count': tier0_a,
+        'tier0_b_count': tier0_b,
+        'tier0_c_count': tier0_c,
+        'tier1_count': tier1,
+        'tier2_count': tier2,
+        'tier4_count': tier4,
+        'market_kospi_ok': MARKET_OK['KOSPI'],
+        'market_kosdaq_ok': MARKET_OK['KOSDAQ'],
         'algorithm': {
-            'name': 'SIGVIEW 시즌1 v5.3 - 눌림목/매집',
-            'description': '🌟베스트(눌림목+매집+가짜반등컷) / 🟢1순위 / 🟡2순위 / ⚪관찰',
+            'name': 'SIGVIEW 시즌1 v5.0 - 힘 모으는 자리',
+            'description': 'PA(단기 5-10일) / PB(중기 10-25일) / PC(장기 25-60일) - 60일 +40% 컷',
         },
         'stocks': results, 'data': data_dict,
-        'disclaimer': 'v5.3 = 20일선+HL+압축+CMF회복+자금조용 / 가짜반등 감점',
+        'disclaimer': 'v5.0 = 힘 모으는 자리 (PA/PB/PC) + 60일+40% 컷 + 매집 신호 + 거래량 감소',
     }
     output = to_native(output)
-    
+
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
-    
+
     elapsed = time.time() - t0
     log(f"\n저장: {OUTPUT_FILE} ({elapsed:.0f}초)")
     log("\nStep 4: FTP 업로드")
@@ -684,5 +735,6 @@ if __name__ == '__main__':
         main()
     except Exception as e:
         log(f"✗ 치명적 오류: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
