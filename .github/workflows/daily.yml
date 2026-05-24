@@ -1,7 +1,7 @@
-name: SIGVIEW 잭팟 시즌1 v4.6 (매일)
+name: SIGVIEW 잭팟 시즌1 v4.9 (매일)
 on:
   schedule:
-    - cron: '30 21 * * 1-5'  # 매일 06:30 KST
+    - cron: '30 21 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -26,6 +26,6 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jackpot-v46-${{ github.run_number }}
+          name: jackpot-v49-${{ github.run_number }}
           path: jackpot.json
           retention-days: 14
