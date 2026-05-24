@@ -541,14 +541,17 @@ def analyze_stock(code, info):
         
         total = s1 + s2 + s3 + s4 + s5
         
-        # 등급
-        if total >= 85:
+        # 등급 (DART 없으면 자동 45점 만점 모드)
+        max_possible = 100 if (s1 + s2 + s3) > 0 else 45
+        ratio = total / max_possible * 100
+        
+        if ratio >= 75:
             grade = '💎 다이아몬드'
             tier = 0
-        elif total >= 70:
+        elif ratio >= 60:
             grade = '🥇 골드'
             tier = 1
-        elif total >= 55:
+        elif ratio >= 45:
             grade = '🥈 실버'
             tier = 2
         else:
