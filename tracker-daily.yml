@@ -1,0 +1,59 @@
+name: SIGVIEW VALUE Tracker
+
+on:
+  schedule:
+    # value 완료 시간 (07:30 KST) + 여유 30분 = 08:00 KST = UTC 23:00
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["SIGVIEW VALUE Daily"]
+    types: [completed]
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 스냅샷 누적되도록 fetch-depth=0
+          fetch-depth: 0
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas finance-datareader requests
+      
+      - name: Run Tracker
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASS: ${{ secrets.FTP_PASS }}
+          FTP_TARGET_DIR: ${{ secrets.FTP_TARGET_DIR }}
+        run: |
+          python tracker.py
+      
+      # ★ 스냅샷 자동 commit (다음 실행에서 누적)
+      - name: Commit snapshots
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add tracker_snapshots/
+          git diff --staged --quiet || git commit -m "📸 Daily snapshot $(date +%Y-%m-%d)"
+          git push
+        continue-on-error: true
+      
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracker-output
+          path: tracker.json
+          retention-days: 30
