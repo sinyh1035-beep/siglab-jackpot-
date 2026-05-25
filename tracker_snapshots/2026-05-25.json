@@ -1,7 +1,7 @@
 {
   "date": "2026-05-25",
   "value_version": "v6.0",
-  "value_updated": "2026-05-25 00:47:44",
+  "value_updated": "2026-05-25 22:48:04",
   "categories": {
     "diamond": [],
     "gold": [
@@ -15,6 +15,18 @@
         "short_term_score": 19,
         "grade": "🥇 골드",
         "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "016380",
+        "name": "KG스틸",
+        "market": "KOSPI",
+        "price": 6760.0,
+        "mcap": 6760,
+        "total_score": 77,
+        "short_term_score": 14,
+        "grade": "🥇 골드",
+        "short_grade": "",
         "is_pref": false
       },
       {
@@ -85,18 +97,6 @@
         "mcap": 37773,
         "total_score": 69,
         "short_term_score": 5,
-        "grade": "🥇 골드",
-        "short_grade": "",
-        "is_pref": false
-      },
-      {
-        "code": "016380",
-        "name": "KG스틸",
-        "market": "KOSPI",
-        "price": 6760.0,
-        "mcap": 6760,
-        "total_score": 69,
-        "short_term_score": 14,
         "grade": "🥇 골드",
         "short_grade": "",
         "is_pref": false
