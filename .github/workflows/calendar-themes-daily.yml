@@ -1,0 +1,40 @@
+name: SIGVIEW Calendar - Daily Theme Collection
+
+on:
+  # 매일 새벽 6:30 KST (UTC 21:30 전날)
+  # 뉴스 수집(6:00) 끝난 후 30분 뒤 시작
+  schedule:
+    - cron: '30 21 * * *'
+  # 수동 실행 가능
+  workflow_dispatch:
+
+jobs:
+  collect-themes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: 📥 코드 체크아웃
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Python 3.11 셋업
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 📦 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 🎯 테마 수집 + AI 분석
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          cd calendar
+          python collect_themes.py
