@@ -112,11 +112,12 @@ def collect_events_for_stock(stock: dict) -> list:
         return []
 
     # 3. Claude API로 미래 일정 추출 (최대 15건)
-    extracted = extract_events_from_news(name, unique_news[:MAX_NEWS_FOR_CLAUDE])
+    sent_news = unique_news[:MAX_NEWS_FOR_CLAUDE]
+    extracted = extract_events_from_news(name, sent_news)
     if not extracted:
         return []
 
-    # 4. 검증
+    # 4. 검증 (Claude가 명시한 source_url 있을 때만 저장)
     validated = []
     for event in extracted:
         validated_event = validate_event(event, name, code)
