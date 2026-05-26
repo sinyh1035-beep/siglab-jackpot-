@@ -1,40 +1,98 @@
 """
-SIGVIEW Calendar - 뉴스 기반 미래 일정 수집기 (매일 새벽 6:00)
+SIGVIEW Calendar - 뉴스 기반 미래 일정 수집기 v2.0
 
-실행 흐름:
-1. stocks 테이블에서 시총 상위 100개 종목 조회
-2. 각 종목명으로 네이버 뉴스 검색 (최신 10건)
-3. Claude API로 미래 일정 추출
-4. 검증 + events 테이블에 저장 (source_type='NEWS')
+변경 사항:
+- 네이버 뉴스 + 구글 뉴스 RSS 동시 수집
+- 중복 제거 (같은 뉴스 한 번만 처리)
+- ETF/ETN 종목 자동 제외
 """
 import time
 from datetime import datetime
 
 from supabase_client import get_client
-from naver_news import search_stock_news
+from naver_news import search_stock_news as naver_search
+from google_news import search_stock_news as google_search
 from news_extractor import extract_events_from_news, validate_event
 
 
 # 비용/한도 관리
-MAX_STOCKS_PER_RUN = 100  # 하루 100개 종목만 (시총 상위)
-NEWS_PER_STOCK = 10  # 종목당 뉴스 10건
-SLEEP_BETWEEN_STOCKS = 0.5  # API 호출 간격 (네이버 매너)
+MAX_STOCKS_PER_RUN = 100  # 시총 상위 100개만
+NEWS_PER_SOURCE = 8  # 각 출처에서 8건씩 (총 16건)
+MAX_NEWS_FOR_CLAUDE = 15  # Claude에 보낼 최대 뉴스 (비용 관리)
+SLEEP_BETWEEN_STOCKS = 0.5  # API 호출 간격
+
+# ETF/ETN 식별 키워드 (이런 거 시작하면 제외)
+ETF_PREFIXES = [
+    "KODEX", "TIGER", "KBSTAR", "ARIRANG", "HANARO", "ACE",
+    "KOSEF", "SOL", "RISE", "PLUS", "TIMEFOLIO", "KIWOOM",
+    "WOORI", "POWER", "MASTER", "FOCUS"
+]
+ETN_KEYWORDS = ["ETN", "레버리지", "인버스"]
+
+
+def is_etf_or_etn(name: str) -> bool:
+    """ETF/ETN 종목인지 판별"""
+    if not name:
+        return False
+    upper = name.upper()
+    for prefix in ETF_PREFIXES:
+        if upper.startswith(prefix):
+            return True
+    for kw in ETN_KEYWORDS:
+        if kw in name:
+            return True
+    return False
 
 
 def get_target_stocks():
-    """시총 상위 100개 종목 가져오기"""
+    """시총 상위 100개 종목 (ETF 제외)"""
     client = get_client()
+    # 여유있게 200개 가져와서 ETF 거르고 상위 100개
     result = client.table("stocks") \
         .select("code,name,market_cap") \
         .order("market_cap", desc=True) \
-        .limit(MAX_STOCKS_PER_RUN) \
+        .limit(200) \
         .execute()
 
     if not result.data:
         raise RuntimeError("stocks 테이블이 비어있습니다")
 
-    print(f"📋 추적 대상 종목: 시총 상위 {len(result.data)}개")
-    return result.data
+    # ETF 제외
+    filtered = []
+    skipped_etf = 0
+    for stock in result.data:
+        if is_etf_or_etn(stock.get("name", "")):
+            skipped_etf += 1
+            continue
+        filtered.append(stock)
+        if len(filtered) >= MAX_STOCKS_PER_RUN:
+            break
+
+    print(f"📋 추적 대상: {len(filtered)}개 (ETF/ETN {skipped_etf}개 제외)")
+    return filtered
+
+
+def merge_news(naver_items: list, google_items: list) -> list:
+    """네이버 + 구글 뉴스 합치고 중복 제거"""
+    all_news = naver_items + google_items
+    seen_titles = set()
+    unique_news = []
+
+    for n in all_news:
+        title = (n.get("title") or "").strip()
+        if len(title) < 10:
+            continue
+
+        # 제목 정규화 (소문자 + 공백 정리)
+        normalized = " ".join(title.lower().split())
+        # 너무 비슷한 제목 체크 (앞 30자 기준)
+        key = normalized[:30]
+        if key in seen_titles:
+            continue
+        seen_titles.add(key)
+        unique_news.append(n)
+
+    return unique_news
 
 
 def collect_events_for_stock(stock: dict) -> list:
@@ -42,17 +100,23 @@ def collect_events_for_stock(stock: dict) -> list:
     code = stock["code"]
     name = stock["name"]
 
-    # 1. 뉴스 검색
-    news_items = search_stock_news(name, display=NEWS_PER_STOCK)
-    if not news_items:
+    # 1. 네이버 뉴스 + 구글 뉴스 동시 수집
+    naver_items = naver_search(name, display=NEWS_PER_SOURCE)
+    google_items = google_search(name, max_results=NEWS_PER_SOURCE)
+
+    # 2. 중복 제거
+    unique_news = merge_news(naver_items, google_items)
+    print(f"   📰 네이버 {len(naver_items)}건 + 구글 {len(google_items)}건 → 중복 제거 {len(unique_news)}건")
+
+    if not unique_news:
         return []
 
-    # 2. Claude API로 미래 일정 추출
-    extracted = extract_events_from_news(name, news_items)
+    # 3. Claude API로 미래 일정 추출 (최대 15건)
+    extracted = extract_events_from_news(name, unique_news[:MAX_NEWS_FOR_CLAUDE])
     if not extracted:
         return []
 
-    # 3. 검증 + 형식 변환
+    # 4. 검증
     validated = []
     for event in extracted:
         validated_event = validate_event(event, name, code)
@@ -70,7 +134,7 @@ def save_news_events(events: list):
 
     client = get_client()
 
-    # 중복 체크: 같은 종목 + 같은 제목 + 같은 날짜
+    # 중복 체크
     print(f"\n🔍 중복 체크 중...")
     existing = client.table("events") \
         .select("stock_code,event_date,title") \
@@ -82,20 +146,18 @@ def save_news_events(events: list):
         key = f"{row.get('stock_code', '')}_{row.get('event_date', '')}_{row.get('title', '')[:50]}"
         existing_keys.add(key)
 
-    # 새 이벤트만 필터
     new_events = []
     for e in events:
         key = f"{e['stock_code']}_{e['event_date']}_{e['title'][:50]}"
         if key not in existing_keys:
             new_events.append(e)
-            existing_keys.add(key)  # 같은 배치 내 중복도 방지
+            existing_keys.add(key)
 
     print(f"   신규: {len(new_events)}건 (중복 {len(events) - len(new_events)}건 제외)")
 
     if not new_events:
         return
 
-    # 배치 저장
     batch_size = 50
     success = 0
     for i in range(0, len(new_events), batch_size):
@@ -103,7 +165,7 @@ def save_news_events(events: list):
         try:
             client.table("events").insert(batch).execute()
             success += len(batch)
-            print(f"   → {success}/{len(new_events)}건 저장 완료")
+            print(f"   → {success}/{len(new_events)}건 저장")
         except Exception as ex:
             print(f"   ❌ 배치 저장 실패: {ex}")
 
@@ -111,7 +173,6 @@ def save_news_events(events: list):
 
 
 def print_summary(events: list):
-    """수집 결과 요약"""
     if not events:
         return
 
@@ -119,13 +180,12 @@ def print_summary(events: list):
     neg = sum(1 for e in events if e["sentiment"] == "악재")
     top_impact = [e for e in events if e["impact_score"] >= 4]
 
-    # 이벤트 타입별 카운트
     type_count = {}
     for e in events:
         t = e.get("event_type", "기타")
         type_count[t] = type_count.get(t, 0) + 1
 
-    print(f"\n📊 추출 결과 요약")
+    print(f"\n📊 추출 결과")
     print(f"   총 {len(events)}건")
     print(f"   호재 {pos} / 악재 {neg} / 중립 {len(events) - pos - neg}")
     print(f"   ⭐ 高영향(4점+): {len(top_impact)}건")
@@ -142,17 +202,15 @@ def print_summary(events: list):
 
 def main():
     print("=" * 60)
-    print("📰 SIGVIEW Calendar - 뉴스 일정 수집")
+    print("📰 SIGVIEW Calendar - 뉴스 일정 수집 (네이버 + 구글)")
     print("=" * 60)
-    print(f"시작 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # 1. 대상 종목
     stocks = get_target_stocks()
 
-    # 2. 종목별 수집
     all_events = []
-    stock_success = 0
-    stock_skip = 0
+    success_count = 0
+    skip_count = 0
 
     for i, stock in enumerate(stocks, 1):
         name = stock["name"]
@@ -162,31 +220,28 @@ def main():
             events = collect_events_for_stock(stock)
             if events:
                 print(f"   ✅ 미래 일정 {len(events)}건 추출")
-                for e in events[:3]:  # 최대 3건만 미리보기
-                    sentiment_emoji = {"호재": "🟢", "악재": "🔴", "중립": "⚪"}.get(e["sentiment"], "⚪")
-                    print(f"      {sentiment_emoji} {e['event_date']} - {e['title'][:50]}")
+                for e in events[:3]:
+                    emoji = {"호재": "🟢", "악재": "🔴", "중립": "⚪"}.get(e["sentiment"], "⚪")
+                    print(f"      {emoji} {e['event_date']} - {e['title'][:50]}")
                 all_events.extend(events)
-                stock_success += 1
+                success_count += 1
             else:
                 print(f"   - 추출된 미래 일정 없음")
-                stock_skip += 1
+                skip_count += 1
         except Exception as e:
             print(f"   ❌ 처리 실패: {e}")
-            stock_skip += 1
+            skip_count += 1
 
-        # API 매너 (네이버 + Claude)
         time.sleep(SLEEP_BETWEEN_STOCKS)
 
-    # 3. 요약
     print(f"\n{'=' * 60}")
-    print(f"📈 처리 완료: {stock_success}개 성공 / {stock_skip}개 건너뜀")
+    print(f"📈 처리: {success_count}개 성공 / {skip_count}개 건너뜀")
     print_summary(all_events)
 
-    # 4. 저장
     save_news_events(all_events)
 
     print("\n" + "=" * 60)
-    print(f"🎉 작업 완료! 종료: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🎉 완료: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
 
