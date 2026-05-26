@@ -1,20 +1,30 @@
 """
 SIGVIEW Calendar - Supabase 클라이언트
 DB 연결 관리 모듈
+
+키 우선순위:
+1. SUPABASE_SERVICE_KEY (쓰기 권한, GitHub Actions용)
+2. SUPABASE_KEY (읽기 전용, 프론트엔드용 폴백)
 """
 import os
 from supabase import create_client, Client
 
 
 def get_client() -> Client:
-    """Supabase 클라이언트 반환"""
+    """Supabase 클라이언트 반환 (service_role 우선)"""
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
+
+    # 쓰기가 필요한 작업(GitHub Actions)은 SERVICE_KEY 사용
+    # 없으면 일반 anon key로 폴백 (읽기만 가능)
+    key = (
+        os.environ.get("SUPABASE_SERVICE_KEY")
+        or os.environ.get("SUPABASE_KEY")
+    )
 
     if not url or not key:
         raise ValueError(
-            "SUPABASE_URL과 SUPABASE_KEY 환경변수가 필요합니다. "
-            "GitHub Actions Secrets 또는 로컬 .env 확인하세요."
+            "SUPABASE_URL과 SUPABASE_SERVICE_KEY (또는 SUPABASE_KEY) "
+            "환경변수가 필요합니다. GitHub Actions Secrets를 확인하세요."
         )
 
     return create_client(url, key)
