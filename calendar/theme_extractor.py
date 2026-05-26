@@ -195,6 +195,11 @@ def validate_theme_event(event: dict, theme_name: str, stocks_map: dict) -> list
         if not code:
             continue  # stocks 테이블에 없는 종목은 제외
 
+        # source_url 검증 (http:// 또는 https:// 시작)
+        raw_url = event.get("source_url", "") or ""
+        raw_url = raw_url.strip() if isinstance(raw_url, str) else ""
+        valid_url = raw_url if (raw_url.startswith("http://") or raw_url.startswith("https://")) else ""
+
         rows.append({
             "event_date": event_date,
             "stock_code": code,
@@ -205,7 +210,7 @@ def validate_theme_event(event: dict, theme_name: str, stocks_map: dict) -> list
             "impact_score": impact,
             "sentiment": sentiment,
             "source_type": "THEME",
-            "source_url": event.get("source_url", ""),
+            "source_url": valid_url,
             "raw_data": {
                 "theme": theme_name,
                 "all_related": related_stocks,
