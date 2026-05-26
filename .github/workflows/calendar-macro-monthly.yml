@@ -1,0 +1,35 @@
+name: SIGVIEW Calendar - Monthly Macro Update
+
+on:
+  # 매월 1일 새벽 7:30 KST (UTC 22:30 전월 마지막날)
+  schedule:
+    - cron: '30 22 1 * *'
+  workflow_dispatch:
+
+jobs:
+  collect-macro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - name: 📥 코드 체크아웃
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Python 3.11 셋업
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 📦 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 🌍 거시 경제 일정 수집
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          cd calendar
+          python macro_collector.py
