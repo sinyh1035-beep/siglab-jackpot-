@@ -1,15 +1,15 @@
 name: SIGVIEW Calendar - Weekly Stocks Update
 
 on:
-  # 매주 일요일 새벽 5시 KST (UTC 20:00 토요일)
+  # 일요일 새벽 5시 KST (UTC 20:00 토요일)
   schedule:
     - cron: '0 20 * * 6'
-  # 수동 실행 가능
   workflow_dispatch:
 
 jobs:
-  update-stocks:
+  collect-stocks:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     
     steps:
       - name: 📥 코드 체크아웃
@@ -25,11 +25,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 📊 종목 500개 수집 및 저장
+      - name: 📊 종목 500개 수집
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
-          cd calendar
+          cd sigcal
           python collect_stocks.py
