@@ -1,0 +1,36 @@
+name: SIGVIEW SEMI v1.0 (반도체 전문)
+
+on:
+  schedule:
+    # 매일 20:00 UTC = 다음날 05:00 KST (시즌1~3 다음)
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+
+jobs:
+  scan-semi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance finance-datareader pandas numpy requests python-dotenv
+
+      - name: Run SIGVIEW SEMI
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASS: ${{ secrets.FTP_PASS }}
+          FTP_TARGET_DIR: ${{ secrets.FTP_TARGET_DIR }}
+        run: python fetch_data_semi.py
