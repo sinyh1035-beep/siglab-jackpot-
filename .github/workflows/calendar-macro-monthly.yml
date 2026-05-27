@@ -1,7 +1,7 @@
 name: SIGVIEW Calendar - Monthly Macro Update
 
 on:
-  # 매월 1일 새벽 7:30 KST (UTC 22:30 전월 마지막날)
+  # 매월 1일 새벽 7:30 KST
   schedule:
     - cron: '30 22 1 * *'
   workflow_dispatch:
@@ -31,5 +31,5 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
-          cd calendar
+          cd sigcal
           python macro_collector.py
