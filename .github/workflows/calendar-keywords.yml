@@ -1,0 +1,39 @@
+name: SIGVIEW Calendar - News Keywords (Every 30min)
+
+on:
+  # 30분마다 (Claude 미사용 - 무료)
+  # ⚠️ GitHub Actions 한도 주의 (월 2000분)
+  # 현재 비활성화. 수동 테스트 후 cron 주석 풀기
+  # schedule:
+  #   - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  collect-keywords:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: 📥 코드 체크아웃
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Python 3.11 셋업
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 📦 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 📰 키워드 뉴스 수집
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+        run: |
+          cd sigcal
+          python collect_news_keywords.py
