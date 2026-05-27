@@ -153,18 +153,19 @@ def save_news_feed(news_list: list):
     if not new_items:
         return
 
-    # 배치 저장
-    batch_size = 50
+    # 한 건씩 저장 (배치 충돌 방지)
     success = 0
-    for i in range(0, len(new_items), batch_size):
-        batch = new_items[i:i + batch_size]
+    fail = 0
+    for item in new_items:
         try:
-            client.table("news_feed").insert(batch).execute()
-            success += len(batch)
+            client.table("news_feed").insert(item).execute()
+            success += 1
         except Exception as ex:
-            print(f"   ❌ 배치 실패: {ex}")
+            fail += 1
+            if fail <= 3:  # 처음 3개 에러만 출력
+                print(f"   ❌ 저장 실패 (link={item.get('link', '')[:50]}): {ex}")
 
-    print(f"✅ 저장 완료: {success}건")
+    print(f"✅ 저장 완료: {success}건 (실패 {fail}건)")
 
 
 def cleanup_old_news():
