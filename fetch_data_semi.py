@@ -718,6 +718,7 @@ def analyze(price_data, fundamentals, foreign_data, stock_news):
             opens = info.get('opens', closes)
             highs = info.get('highs', closes)
             lows = info.get('lows', closes)
+            vols = info.get('vols', [])
             
             d_o = opens[-252:] if len(opens) >= 252 else opens
             d_h = highs[-252:] if len(highs) >= 252 else highs
