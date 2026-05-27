@@ -1,0 +1,278 @@
+{
+  "date": "2026-05-27",
+  "value_version": "v6.0",
+  "value_updated": "2026-05-25 22:48:04",
+  "categories": {
+    "diamond": [],
+    "gold": [
+      {
+        "code": "009450",
+        "name": "경동나비엔",
+        "market": "KOSPI",
+        "price": 73600.0,
+        "mcap": 10722,
+        "total_score": 82,
+        "short_term_score": 19,
+        "grade": "🥇 골드",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "016380",
+        "name": "KG스틸",
+        "market": "KOSPI",
+        "price": 6760.0,
+        "mcap": 6760,
+        "total_score": 77,
+        "short_term_score": 14,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "001200",
+        "name": "유진투자증권",
+        "market": "KOSPI",
+        "price": 5360.0,
+        "mcap": 5192,
+        "total_score": 74,
+        "short_term_score": 4,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "290550",
+        "name": "디케이티",
+        "market": "KOSDAQ",
+        "price": 28150.0,
+        "mcap": 5630,
+        "total_score": 70,
+        "short_term_score": 6,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "027410",
+        "name": "BGF",
+        "market": "KOSPI",
+        "price": 4605.0,
+        "mcap": 4407,
+        "total_score": 70,
+        "short_term_score": 3,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "160980",
+        "name": "싸이맥스",
+        "market": "KOSDAQ",
+        "price": 34700.0,
+        "mcap": 3790,
+        "total_score": 70,
+        "short_term_score": 11,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "005010",
+        "name": "휴스틸",
+        "market": "KOSPI",
+        "price": 5620.0,
+        "mcap": 3157,
+        "total_score": 70,
+        "short_term_score": 9,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "012510",
+        "name": "더존비즈온",
+        "market": "KOSPI",
+        "price": 120000.0,
+        "mcap": 37773,
+        "total_score": 69,
+        "short_term_score": 5,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "020000",
+        "name": "한섬",
+        "market": "KOSPI",
+        "price": 24900.0,
+        "mcap": 5347,
+        "total_score": 68,
+        "short_term_score": 7,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "306200",
+        "name": "세아제강",
+        "market": "KOSPI",
+        "price": 156900.0,
+        "mcap": 4450,
+        "total_score": 68,
+        "short_term_score": 7,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      }
+    ],
+    "short_ready": [
+      {
+        "code": "058650",
+        "name": "세아홀딩스",
+        "market": "KOSPI",
+        "price": 156300.0,
+        "mcap": 6630,
+        "total_score": 44,
+        "short_term_score": 23,
+        "grade": "⚪ 관찰",
+        "short_grade": "🚀 단기준비",
+        "is_pref": false
+      },
+      {
+        "code": "009450",
+        "name": "경동나비엔",
+        "market": "KOSPI",
+        "price": 73600.0,
+        "mcap": 10722,
+        "total_score": 82,
+        "short_term_score": 19,
+        "grade": "🥇 골드",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "015360",
+        "name": "INVENI",
+        "market": "KOSPI",
+        "price": 16490.0,
+        "mcap": 4493,
+        "total_score": 62,
+        "short_term_score": 18,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "178920",
+        "name": "PI첨단소재",
+        "market": "KOSPI",
+        "price": 27500.0,
+        "mcap": 8075,
+        "total_score": 57,
+        "short_term_score": 18,
+        "grade": "⚪ DART無 (참고용)",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "415640",
+        "name": "KB발해인프라",
+        "market": "KOSPI",
+        "price": 10030.0,
+        "mcap": 12291,
+        "total_score": 44,
+        "short_term_score": 18,
+        "grade": "⚪ DART無 (참고용)",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "280360",
+        "name": "롯데웰푸드",
+        "market": "KOSPI",
+        "price": 121600.0,
+        "mcap": 11192,
+        "total_score": 63,
+        "short_term_score": 17,
+        "grade": "🥇 골드",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "425420",
+        "name": "티에프이",
+        "market": "KOSDAQ",
+        "price": 61700.0,
+        "mcap": 7618,
+        "total_score": 46,
+        "short_term_score": 17,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "445090",
+        "name": "에이직랜드",
+        "market": "KOSDAQ",
+        "price": 29150.0,
+        "mcap": 3184,
+        "total_score": 46,
+        "short_term_score": 17,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "014680",
+        "name": "한솔케미칼",
+        "market": "KOSPI",
+        "price": 297500.0,
+        "mcap": 33826,
+        "total_score": 44,
+        "short_term_score": 17,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "265520",
+        "name": "AP시스템",
+        "market": "KOSDAQ",
+        "price": 27600.0,
+        "mcap": 4154,
+        "total_score": 59,
+        "short_term_score": 16,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      }
+    ],
+    "combo": [
+      {
+        "code": "009450",
+        "name": "경동나비엔",
+        "market": "KOSPI",
+        "price": 73600.0,
+        "mcap": 10722,
+        "total_score": 82,
+        "short_term_score": 19,
+        "grade": "🥇 골드",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "015360",
+        "name": "INVENI",
+        "market": "KOSPI",
+        "price": 16490.0,
+        "mcap": 4493,
+        "total_score": 62,
+        "short_term_score": 18,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      }
+    ]
+  }
+}
