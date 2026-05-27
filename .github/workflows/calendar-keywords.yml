@@ -1,11 +1,10 @@
-name: SIGVIEW Calendar - News Keywords (Every 30min)
+name: SIGVIEW Calendar - News Keywords (Every 2h)
 
 on:
-  # 30분마다 (Claude 미사용 - 무료)
-  # ⚠️ GitHub Actions 한도 주의 (월 2000분)
-  # 현재 비활성화. 수동 테스트 후 cron 주석 풀기
-  # schedule:
-  #   - cron: '*/30 * * * *'
+  # 2시간마다 자동 실행 (Claude 미사용 - 무료)
+  # 월 한도: 약 720분 (전체 2000분의 36%)
+  schedule:
+    - cron: '0 */2 * * *'
   workflow_dispatch:
 
 jobs:
