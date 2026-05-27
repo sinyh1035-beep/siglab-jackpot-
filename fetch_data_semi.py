@@ -266,7 +266,11 @@ def fetch_prices():
                         'eps_fdr': ex.get('eps_fdr'),
                         'bps_fdr': ex.get('bps_fdr'),
                         'dyr_fdr': ex.get('dyr_fdr'),
-                        'closes': [int(round(c)) for c in df['Close'].tolist()],
+                        # OHLCV 4값 (HTS급 차트용)
+                        'opens': [int(round(v)) for v in df['Open'].tolist()],
+                        'highs': [int(round(v)) for v in df['High'].tolist()],
+                        'lows': [int(round(v)) for v in df['Low'].tolist()],
+                        'closes': [int(round(v)) for v in df['Close'].tolist()],
                         'vols': [int(v) for v in df['Volume'].tolist()],
                         'dates': [d.strftime('%Y-%m-%d') for d in df.index],
                     }
@@ -320,6 +324,76 @@ def fetch_fundamentals(price_data):
 # ============================================================
 # Step 3: 외인 (Daum)
 # ============================================================
+def fetch_naver_finance_metrics(price_data):
+    """네이버 금융에서 PER/PBR/배당수익률 크롤링 (yfinance/fdr 3중 fallback의 마지막)"""
+    log(f"Step 4/8: 네이버 금융 PER/PBR ({len(price_data)}종목)...")
+    
+    def get_one(code):
+        try:
+            url = f'https://finance.naver.com/item/main.naver?code={code}'
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept-Language': 'ko-KR,ko;q=0.9',
+            }
+            r = requests.get(url, headers=headers, timeout=8)
+            if r.status_code != 200:
+                return code, {}
+            html = r.text
+            
+            metrics = {}
+            
+            # PER: <em id="_per">12.34</em>
+            m = re.search(r'id="_per"[^>]*>([\d,.\-]+)<', html)
+            if m:
+                try: metrics['per_naver'] = float(m.group(1).replace(',', ''))
+                except: pass
+            
+            # PBR: <em id="_pbr">1.23</em>
+            m = re.search(r'id="_pbr"[^>]*>([\d,.\-]+)<', html)
+            if m:
+                try: metrics['pbr_naver'] = float(m.group(1).replace(',', ''))
+                except: pass
+            
+            # EPS: <em id="_eps">1234</em>
+            m = re.search(r'id="_eps"[^>]*>([\d,.\-]+)<', html)
+            if m:
+                try: metrics['eps_naver'] = float(m.group(1).replace(',', ''))
+                except: pass
+            
+            # BPS: <em id="_bps">12345</em>
+            m = re.search(r'id="_bps"[^>]*>([\d,.\-]+)<', html)
+            if m:
+                try: metrics['bps_naver'] = float(m.group(1).replace(',', ''))
+                except: pass
+            
+            # 배당수익률: <em id="_dvr">2.34</em>
+            m = re.search(r'id="_dvr"[^>]*>([\d,.\-]+)<', html)
+            if m:
+                try: metrics['dvr_naver'] = float(m.group(1).replace(',', ''))
+                except: pass
+            
+            # ROE: <em id="_roe">12.34</em>
+            m = re.search(r'id="_roe"[^>]*>([\d,.\-]+)<', html)
+            if m:
+                try: metrics['roe_naver'] = float(m.group(1).replace(',', ''))
+                except: pass
+            
+            return code, metrics
+        except Exception:
+            return code, {}
+    
+    t0 = time.time()
+    result = {}
+    with ThreadPoolExecutor(max_workers=10) as exe:
+        futures = {exe.submit(get_one, c): c for c in price_data.keys()}
+        for f in as_completed(futures):
+            code, data = f.result()
+            result[code] = data
+    have = sum(1 for d in result.values() if d.get('per_naver') or d.get('pbr_naver'))
+    log(f"  -> {have}/{len(result)} ({time.time()-t0:.0f}초)")
+    return result
+
+
 def fetch_foreign(price_data):
     log(f"Step 3/7: 외인 보유율 ({len(price_data)}종목)...")
     def get_foreign(code):
@@ -640,6 +714,33 @@ def analyze(price_data, fundamentals, foreign_data, stock_news):
             pos_news = sum(1 for n in news if n.get('sentiment') == 'positive')
             neg_news = sum(1 for n in news if n.get('sentiment') == 'negative')
             
+            # OHLCV 차트 데이터 (캔들스틱용)
+            opens = info.get('opens', closes)
+            highs = info.get('highs', closes)
+            lows = info.get('lows', closes)
+            
+            d_o = opens[-252:] if len(opens) >= 252 else opens
+            d_h = highs[-252:] if len(highs) >= 252 else highs
+            d_l = lows[-252:] if len(lows) >= 252 else lows
+            d_v = vols[-252:] if len(vols) >= 252 else vols
+            
+            # 주봉 OHLCV 리샘플
+            try:
+                df_w = pd.DataFrame({
+                    'o': opens, 'h': highs, 'l': lows, 'c': closes, 'v': vols
+                }, index=pd.to_datetime(dates))
+                wk = df_w.resample('W').agg({'o':'first','h':'max','l':'min','c':'last','v':'sum'}).dropna()
+                w_o_full = wk['o'].tolist()
+                w_h_full = wk['h'].tolist()
+                w_l_full = wk['l'].tolist()
+                w_v_full = wk['v'].tolist()
+                w_o = w_o_full[-156:] if len(w_o_full) >= 156 else w_o_full
+                w_h = w_h_full[-156:] if len(w_h_full) >= 156 else w_h_full
+                w_l = w_l_full[-156:] if len(w_l_full) >= 156 else w_l_full
+                w_v = w_v_full[-156:] if len(w_v_full) >= 156 else w_v_full
+            except Exception:
+                w_o = w_h = w_l = w_v = []
+            
             results[code] = {
                 'n': info['name'],
                 'cat': info['cat'],
@@ -652,21 +753,25 @@ def analyze(price_data, fundamentals, foreign_data, stock_news):
                 'j': score,
                 'breakdown': breakdown,
                 
-                # PER/PBR yfinance → fdr fallback
-                'per': (round(fund.get('per'), 2) if fund.get('per') 
-                        else (round(info.get('per_fdr'), 2) if info.get('per_fdr') and info.get('per_fdr') > 0 else None)),
-                'pbr': (round(fund.get('pbr'), 2) if fund.get('pbr') 
-                        else (round(info.get('pbr_fdr'), 2) if info.get('pbr_fdr') and info.get('pbr_fdr') > 0 else None)),
+                # PER yfinance → fdr → 네이버 3중 fallback
+                'per': (round(fund.get('per'), 2) if fund.get('per') and fund.get('per') > 0
+                        else (round(info.get('per_fdr'), 2) if info.get('per_fdr') and info.get('per_fdr') > 0
+                        else (round(fund.get('per_naver'), 2) if fund.get('per_naver') and fund.get('per_naver') > 0 else None))),
+                'pbr': (round(fund.get('pbr'), 2) if fund.get('pbr') and fund.get('pbr') > 0
+                        else (round(info.get('pbr_fdr'), 2) if info.get('pbr_fdr') and info.get('pbr_fdr') > 0
+                        else (round(fund.get('pbr_naver'), 2) if fund.get('pbr_naver') and fund.get('pbr_naver') > 0 else None))),
                 'psr': round(fund.get('psr'), 2) if fund.get('psr') else None,
-                'eps': info.get('eps_fdr'),
-                'bps': info.get('bps_fdr'),
-                'roe': round(fund.get('roe')*100, 1) if fund.get('roe') else None,
+                'eps': info.get('eps_fdr') or fund.get('eps_naver'),
+                'bps': info.get('bps_fdr') or fund.get('bps_naver'),
+                'roe': (round(fund.get('roe')*100, 1) if fund.get('roe')
+                        else (round(fund.get('roe_naver'), 1) if fund.get('roe_naver') else None)),
                 'opm': round(fund.get('opm')*100, 1) if fund.get('opm') else None,
                 'npm': round(fund.get('npm')*100, 1) if fund.get('npm') else None,
                 'debt_ratio': round(fund.get('debt_to_equity'), 1) if fund.get('debt_to_equity') else None,
                 'rev_growth': round(fund.get('revenue_growth')*100, 1) if fund.get('revenue_growth') else None,
                 'earnings_growth': round(fund.get('earnings_growth')*100, 1) if fund.get('earnings_growth') else None,
-                'div_yield': round(info.get('dyr_fdr'), 2) if info.get('dyr_fdr') else None,
+                'div_yield': (round(info.get('dyr_fdr'), 2) if info.get('dyr_fdr')
+                              else (round(fund.get('dvr_naver'), 2) if fund.get('dvr_naver') else None)),
                 
                 'fr': round(fr * 100, 1) if fr is not None else None,
                 
@@ -674,10 +779,21 @@ def analyze(price_data, fundamentals, foreign_data, stock_news):
                 'news_pos_count': pos_news,
                 'news_neg_count': neg_news,
                 
-                'cd': [int(c) for c in d_chart],
+                # 일봉 OHLCV
+                'cd': [int(c) for c in d_chart],     # 종가 (기존 호환)
                 'cdt': d_dates,
+                'co': [int(v) for v in d_o],          # 시가
+                'ch': [int(v) for v in d_h],          # 고가
+                'cl': [int(v) for v in d_l],          # 저가
+                'cv': [int(v) for v in d_v],          # 거래량
+                
+                # 주봉 OHLCV
                 'cw': [int(c) for c in w_chart],
                 'cwt': w_dates_short,
+                'cwo': [int(v) for v in w_o],
+                'cwh': [int(v) for v in w_h],
+                'cwl': [int(v) for v in w_l],
+                'cwv': [int(v) for v in w_v],
                 
                 'h_5y': int(max(closes)),
                 'l_5y': int(min(closes)),
@@ -769,9 +885,16 @@ def main():
     
     prices = fetch_prices()
     fundamentals = fetch_fundamentals(prices)
+    naver_metrics = fetch_naver_finance_metrics(prices)  # ★ 네이버 PER/PBR
     foreign_data = fetch_foreign(prices)
     stock_news = fetch_naver_news_per_stock(prices)
     headlines = fetch_rss_headlines()
+    # 펀더멘털에 네이버 메트릭 병합
+    for code, nm in naver_metrics.items():
+        if code in fundamentals:
+            fundamentals[code].update(nm)
+        else:
+            fundamentals[code] = nm
     results = analyze(prices, fundamentals, foreign_data, stock_news)
     save_and_upload(results, headlines)
     
