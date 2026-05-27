@@ -1,17 +1,18 @@
-name: SIGVIEW Calendar - Daily News Collection
+name: SIGVIEW Calendar - News Collection (DISABLED)
+
+# ⚠️ Claude API 사용 - 비용 발생
+# 키워드 시스템(calendar-keywords.yml)으로 대체됨
+# 자동 실행 비활성화, 수동만 가능
 
 on:
-  # 매일 새벽 6:00 KST (UTC 21:00 전날)
-  # DART 수집(5:30)이 끝난 후 30분 뒤 시작
-  schedule:
-    - cron: '0 21 * * *'
-  # 수동 실행 가능
+  # schedule:
+  #   - cron: '0 21 * * 6'   # 일요일 주 1회 (비활성화됨)
   workflow_dispatch:
 
 jobs:
   collect-news:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     
     steps:
       - name: 📥 코드 체크아웃
@@ -27,7 +28,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 📰 뉴스 수집 + AI 분석
+      - name: 📰 뉴스 수집 (Claude 사용 - 수동만)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -36,5 +37,5 @@ jobs:
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          cd calendar
+          cd sigcal
           python collect_news.py
