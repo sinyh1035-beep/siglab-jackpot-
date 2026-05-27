@@ -205,12 +205,29 @@ def fetch_prices():
     log(f"Step 1/7: 가격 5년 batch ({len(SEMI_UNIVERSE)}종목)...")
     all_data = {}
     
-    # 시총 정보용
+    # 시총 + KRX PER/PBR 정보용 (yfinance가 한국 종목 PER 자주 못 가져옴)
     try:
         krx = fdr.StockListing('KRX')
-        krx_map = dict(zip(krx['Code'], zip(krx['Marcap'], krx['Market'])))
-    except Exception:
-        krx_map = {}
+        # 가용 컬럼 동적 매핑
+        cols = krx.columns
+        krx_extra = {}
+        for _, row in krx.iterrows():
+            code = row.get('Code', '')
+            if not code:
+                continue
+            krx_extra[code] = {
+                'mcap': row.get('Marcap', 0),
+                'market': row.get('Market', 'KOSPI'),
+                'per_fdr': row.get('PER') if 'PER' in cols else None,
+                'pbr_fdr': row.get('PBR') if 'PBR' in cols else None,
+                'eps_fdr': row.get('EPS') if 'EPS' in cols else None,
+                'bps_fdr': row.get('BPS') if 'BPS' in cols else None,
+                'dps_fdr': row.get('DPS') if 'DPS' in cols else None,
+                'dyr_fdr': row.get('DividendYield') if 'DividendYield' in cols else None,
+            }
+    except Exception as e:
+        log(f"  ⚠ fdr StockListing 실패: {e}")
+        krx_extra = {}
     
     codes = list(SEMI_UNIVERSE.keys())
     BATCH = 50
@@ -219,7 +236,8 @@ def fetch_prices():
         batch_codes = codes[i:i+BATCH]
         codes_yf = []
         for c in batch_codes:
-            market = krx_map.get(c, (0, 'KOSPI'))[1]
+            ex = krx_extra.get(c, {})
+            market = ex.get('market', 'KOSPI')
             codes_yf.append(f"{c}.{'KS' if market=='KOSPI' else 'KQ'}")
         try:
             data = yf.download(codes_yf, period='5y', interval='1d', group_by='ticker',
@@ -227,20 +245,27 @@ def fetch_prices():
         except Exception:
             continue
         for c in batch_codes:
-            market = krx_map.get(c, (0, 'KOSPI'))[1]
+            ex = krx_extra.get(c, {})
+            market = ex.get('market', 'KOSPI')
             yf_code = f"{c}.{'KS' if market=='KOSPI' else 'KQ'}"
             try:
                 df = data[yf_code] if len(codes_yf) > 1 else data
                 df = df.dropna()
                 if len(df) > 100:
                     info = SEMI_UNIVERSE[c]
-                    mcap = krx_map.get(c, (0, 'KOSPI'))[0]
+                    mcap = ex.get('mcap', 0)
                     all_data[c] = {
                         'name': info['name'],
                         'cat': info['cat'],
                         'themes': info.get('themes', []),
                         'market': market,
                         'mcap': int(mcap) if mcap else 0,
+                        # fdr PER/PBR (yfinance fallback용)
+                        'per_fdr': ex.get('per_fdr'),
+                        'pbr_fdr': ex.get('pbr_fdr'),
+                        'eps_fdr': ex.get('eps_fdr'),
+                        'bps_fdr': ex.get('bps_fdr'),
+                        'dyr_fdr': ex.get('dyr_fdr'),
                         'closes': [int(round(c)) for c in df['Close'].tolist()],
                         'vols': [int(v) for v in df['Volume'].tolist()],
                         'dates': [d.strftime('%Y-%m-%d') for d in df.index],
@@ -627,15 +652,21 @@ def analyze(price_data, fundamentals, foreign_data, stock_news):
                 'j': score,
                 'breakdown': breakdown,
                 
-                'per': round(fund.get('per'), 2) if fund.get('per') else None,
-                'pbr': round(fund.get('pbr'), 2) if fund.get('pbr') else None,
+                # PER/PBR yfinance → fdr fallback
+                'per': (round(fund.get('per'), 2) if fund.get('per') 
+                        else (round(info.get('per_fdr'), 2) if info.get('per_fdr') and info.get('per_fdr') > 0 else None)),
+                'pbr': (round(fund.get('pbr'), 2) if fund.get('pbr') 
+                        else (round(info.get('pbr_fdr'), 2) if info.get('pbr_fdr') and info.get('pbr_fdr') > 0 else None)),
                 'psr': round(fund.get('psr'), 2) if fund.get('psr') else None,
+                'eps': info.get('eps_fdr'),
+                'bps': info.get('bps_fdr'),
                 'roe': round(fund.get('roe')*100, 1) if fund.get('roe') else None,
                 'opm': round(fund.get('opm')*100, 1) if fund.get('opm') else None,
                 'npm': round(fund.get('npm')*100, 1) if fund.get('npm') else None,
                 'debt_ratio': round(fund.get('debt_to_equity'), 1) if fund.get('debt_to_equity') else None,
                 'rev_growth': round(fund.get('revenue_growth')*100, 1) if fund.get('revenue_growth') else None,
                 'earnings_growth': round(fund.get('earnings_growth')*100, 1) if fund.get('earnings_growth') else None,
+                'div_yield': round(info.get('dyr_fdr'), 2) if info.get('dyr_fdr') else None,
                 
                 'fr': round(fr * 100, 1) if fr is not None else None,
                 
