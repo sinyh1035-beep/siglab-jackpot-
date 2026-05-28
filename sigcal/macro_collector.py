@@ -105,7 +105,7 @@ def collect_macro_events():
     # FOMC
     for start, end in FOMC_DATES_2026:
         events.append(make_event(
-            end, "🇺🇸 FOMC", "MACRO_FOMC",
+            end, "🇺🇸 FOMC", "M_FOMC",
             f"FOMC 회의 결과 발표 ({start} ~ {end})",
             "미국 연준 FOMC 정례 회의. 기준금리 결정, 점도표, 경제 전망 발표.",
             "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
@@ -115,7 +115,7 @@ def collect_macro_events():
     # 한국 금통위
     for date in BOK_DATES_2026:
         events.append(make_event(
-            date, "🇰🇷 한국은행", "MACRO_BOK",
+            date, "🇰🇷 한국은행", "M_BOK",
             "한국은행 금융통화위원회",
             "한국은행 기준금리 결정 회의. 금리 인상/인하/동결 발표.",
             "https://www.bok.or.kr",
@@ -125,7 +125,7 @@ def collect_macro_events():
     # ECB
     for date in ECB_DATES_2026:
         events.append(make_event(
-            date, "🇪🇺 ECB", "MACRO_ECB",
+            date, "🇪🇺 ECB", "M_ECB",
             "ECB 통화정책회의",
             "유럽중앙은행 기준금리 결정. 유로존 통화정책 발표.",
             "https://www.ecb.europa.eu",
@@ -135,7 +135,7 @@ def collect_macro_events():
     # BOJ
     for date in BOJ_DATES_2026:
         events.append(make_event(
-            date, "🇯🇵 BOJ", "MACRO_BOJ",
+            date, "🇯🇵 BOJ", "M_BOJ",
             "일본은행 통화정책회의",
             "일본은행 기준금리 결정. 엔화 환율 변동 가능.",
             "https://www.boj.or.jp",
@@ -145,7 +145,7 @@ def collect_macro_events():
     # 미국 CPI
     for date in US_CPI_DATES_2026:
         events.append(make_event(
-            date, "🇺🇸 미국 CPI", "MACRO_US_CPI",
+            date, "🇺🇸 미국 CPI", "M_USCPI",
             "미국 소비자물가지수 (CPI) 발표",
             "미국 노동통계국(BLS) 월간 CPI 발표. 인플레이션 추세 확인.",
             "https://www.bls.gov/cpi/",
@@ -155,7 +155,7 @@ def collect_macro_events():
     # 미국 PPI
     for date in US_PPI_DATES_2026:
         events.append(make_event(
-            date, "🇺🇸 미국 PPI", "MACRO_US_PPI",
+            date, "🇺🇸 미국 PPI", "M_USPPI",
             "미국 생산자물가지수 (PPI) 발표",
             "미국 노동통계국(BLS) 월간 PPI 발표. 인플레이션 선행지표.",
             "https://www.bls.gov/ppi/",
@@ -165,7 +165,7 @@ def collect_macro_events():
     # 미국 NFP
     for date in US_NFP_DATES_2026:
         events.append(make_event(
-            date, "🇺🇸 미국 NFP", "MACRO_US_NFP",
+            date, "🇺🇸 미국 NFP", "M_USNFP",
             "미국 비농업 고용지표 (NFP) 발표",
             "매월 첫째 금요일 미국 노동시장 지표. 시장 변동성 큰 이벤트.",
             "https://www.bls.gov/news.release/empsit.toc.htm",
@@ -175,7 +175,7 @@ def collect_macro_events():
     # 한국 CPI
     for date in KR_CPI_DATES_2026:
         events.append(make_event(
-            date, "🇰🇷 한국 CPI", "MACRO_KR_CPI",
+            date, "🇰🇷 한국 CPI", "M_KRCPI",
             "한국 소비자물가지수 (CPI) 발표",
             "통계청 월간 CPI 발표. 한국은행 금리 결정에 영향.",
             "https://kostat.go.kr",
@@ -185,7 +185,7 @@ def collect_macro_events():
     # 한국 GDP
     for date in KR_GDP_DATES_2026:
         events.append(make_event(
-            date, "🇰🇷 한국 GDP", "MACRO_KR_GDP",
+            date, "🇰🇷 한국 GDP", "M_KRGDP",
             "한국 분기별 GDP 속보치 발표",
             "한국은행 분기별 실질 GDP 속보치 발표. 경제 성장률 확인.",
             "https://www.bok.or.kr",
@@ -195,7 +195,7 @@ def collect_macro_events():
     # 중국 CPI
     for date in CN_CPI_DATES_2026:
         events.append(make_event(
-            date, "🇨🇳 중국 CPI", "MACRO_CN_CPI",
+            date, "🇨🇳 중국 CPI", "M_CNCPI",
             "중국 소비자물가지수 (CPI) 발표",
             "중국 국가통계국 월간 CPI 발표. 디플레이션 우려 확인.",
             "http://www.stats.gov.cn",
@@ -205,7 +205,7 @@ def collect_macro_events():
     # 중국 PMI
     for date in CN_PMI_DATES_2026:
         events.append(make_event(
-            date, "🇨🇳 중국 PMI", "MACRO_CN_PMI",
+            date, "🇨🇳 중국 PMI", "M_CNPMI",
             "중국 제조업/서비스업 PMI 발표",
             "중국 제조업/비제조업 PMI 발표. 글로벌 경기 흐름 확인.",
             "http://www.stats.gov.cn",
@@ -215,7 +215,7 @@ def collect_macro_events():
     # MSCI
     for date, title in MSCI_DATES_2026:
         events.append(make_event(
-            date, "🌍 MSCI", "MACRO_MSCI", title,
+            date, "🌍 MSCI", "M_MSCI", title,
             "MSCI 지수 정기 리뷰. 종목 편입/제외, 유동시가총액(FIF) 조정.",
             "https://www.msci.com/index-review",
             4, sentiment="중립", etype="수급"
@@ -228,7 +228,7 @@ def collect_macro_events():
         is_quarterly = month in (3, 6, 9, 12)
         if is_quarterly:
             events.append(make_event(
-                date, "📊 옵션 만기", "MACRO_OPT",
+                date, "📊 옵션 만기", "M_OPT",
                 "쿼드러플 위칭데이",
                 "분기 옵션 만기일 (선물·옵션 동시 만기). 프로그램 매매 주의.",
                 "https://kind.krx.co.kr",
@@ -236,7 +236,7 @@ def collect_macro_events():
             ))
         else:
             events.append(make_event(
-                date, "📊 옵션 만기", "MACRO_OPT",
+                date, "📊 옵션 만기", "M_OPT",
                 "월물 옵션 만기일",
                 "월별 코스피200 옵션 만기일.",
                 "https://kind.krx.co.kr",
