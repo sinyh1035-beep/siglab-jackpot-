@@ -1,0 +1,253 @@
+{
+  "date": "2026-05-29",
+  "value_version": "v6.0",
+  "value_updated": "2026-05-28 23:25:10",
+  "categories": {
+    "diamond": [],
+    "gold": [
+      {
+        "code": "009450",
+        "name": "경동나비엔",
+        "market": "KOSPI",
+        "price": 72000.0,
+        "mcap": 10489,
+        "total_score": 80,
+        "short_term_score": 17,
+        "grade": "🥇 골드",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "108670",
+        "name": "LX하우시스",
+        "market": "KOSPI",
+        "price": 34550.0,
+        "mcap": 3098,
+        "total_score": 76,
+        "short_term_score": 4,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "020000",
+        "name": "한섬",
+        "market": "KOSPI",
+        "price": 23800.0,
+        "mcap": 5111,
+        "total_score": 67,
+        "short_term_score": 0,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "023530",
+        "name": "롯데쇼핑",
+        "market": "KOSPI",
+        "price": 151300.0,
+        "mcap": 42800,
+        "total_score": 66,
+        "short_term_score": 16,
+        "grade": "🥇 골드",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "192080",
+        "name": "더블유게임즈",
+        "market": "KOSPI",
+        "price": 70000.0,
+        "mcap": 14821,
+        "total_score": 65,
+        "short_term_score": 8,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "290550",
+        "name": "디케이티",
+        "market": "KOSDAQ",
+        "price": 25200.0,
+        "mcap": 5040,
+        "total_score": 65,
+        "short_term_score": 1,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "204620",
+        "name": "글로벌텍스프리",
+        "market": "KOSDAQ",
+        "price": 4810.0,
+        "mcap": 3380,
+        "total_score": 65,
+        "short_term_score": 1,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "012510",
+        "name": "더존비즈온",
+        "market": "KOSPI",
+        "price": 120000.0,
+        "mcap": 37773,
+        "total_score": 64,
+        "short_term_score": 8,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "000210",
+        "name": "DL",
+        "market": "KOSPI",
+        "price": 54800.0,
+        "mcap": 11483,
+        "total_score": 64,
+        "short_term_score": 8,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "027410",
+        "name": "BGF",
+        "market": "KOSPI",
+        "price": 4565.0,
+        "mcap": 4369,
+        "total_score": 64,
+        "short_term_score": 1,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      }
+    ],
+    "short_ready": [
+      {
+        "code": "004700",
+        "name": "조광피혁",
+        "market": "KOSPI",
+        "price": 63800.0,
+        "mcap": 4242,
+        "total_score": 28,
+        "short_term_score": 20,
+        "grade": "⚪ DART無 (참고용)",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "005389",
+        "name": "현대차3우B",
+        "market": "KOSPI",
+        "price": 254000.0,
+        "mcap": 5911,
+        "total_score": 47,
+        "short_term_score": 18,
+        "grade": "⚪ DART無 (참고용)",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": true
+      },
+      {
+        "code": "006280",
+        "name": "녹십자",
+        "market": "KOSPI",
+        "price": 142700.0,
+        "mcap": 16676,
+        "total_score": 33,
+        "short_term_score": 18,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "009450",
+        "name": "경동나비엔",
+        "market": "KOSPI",
+        "price": 72000.0,
+        "mcap": 10489,
+        "total_score": 80,
+        "short_term_score": 17,
+        "grade": "🥇 골드",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "036200",
+        "name": "유니셈",
+        "market": "KOSDAQ",
+        "price": 11830.0,
+        "mcap": 3627,
+        "total_score": 47,
+        "short_term_score": 17,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "241770",
+        "name": "메카로",
+        "market": "KOSDAQ",
+        "price": 39350.0,
+        "mcap": 4010,
+        "total_score": 45,
+        "short_term_score": 17,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "416180",
+        "name": "신성에스티",
+        "market": "KOSDAQ",
+        "price": 34050.0,
+        "mcap": 3078,
+        "total_score": 40,
+        "short_term_score": 17,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "445680",
+        "name": "큐리옥스바이오시스템즈",
+        "market": "KOSDAQ",
+        "price": 92700.0,
+        "mcap": 15947,
+        "total_score": 23,
+        "short_term_score": 17,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "023530",
+        "name": "롯데쇼핑",
+        "market": "KOSPI",
+        "price": 151300.0,
+        "mcap": 42800,
+        "total_score": 66,
+        "short_term_score": 16,
+        "grade": "🥇 골드",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "389470",
+        "name": "인벤티지랩",
+        "market": "KOSDAQ",
+        "price": 53100.0,
+        "mcap": 7066,
+        "total_score": 39,
+        "short_term_score": 16,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      }
+    ],
+    "combo": []
+  }
+}
