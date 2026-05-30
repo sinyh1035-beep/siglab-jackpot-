@@ -1,9 +1,22 @@
 {
   "date": "2026-05-30",
   "value_version": "v6.0",
-  "value_updated": "2026-05-29 23:26:41",
+  "value_updated": "2026-05-30 22:44:06",
   "categories": {
-    "diamond": [],
+    "diamond": [
+      {
+        "code": "248070",
+        "name": "솔루엠",
+        "market": "KOSPI",
+        "price": 20000.0,
+        "mcap": 9563,
+        "total_score": 94,
+        "short_term_score": 2,
+        "grade": "💎 다이아몬드",
+        "short_grade": "",
+        "is_pref": false
+      }
+    ],
     "gold": [
       {
         "code": "009450",
@@ -13,18 +26,6 @@
         "mcap": 10212,
         "total_score": 76,
         "short_term_score": 11,
-        "grade": "🥇 골드",
-        "short_grade": "",
-        "is_pref": false
-      },
-      {
-        "code": "023530",
-        "name": "롯데쇼핑",
-        "market": "KOSPI",
-        "price": 147700.0,
-        "mcap": 41782,
-        "total_score": 73,
-        "short_term_score": 7,
         "grade": "🥇 골드",
         "short_grade": "",
         "is_pref": false
@@ -66,31 +67,31 @@
         "is_pref": false
       },
       {
-        "code": "003690",
-        "name": "코리안리",
+        "code": "192080",
+        "name": "더블유게임즈",
         "market": "KOSPI",
-        "price": 12850.0,
-        "mcap": 22708,
-        "total_score": 64,
-        "short_term_score": 14,
-        "grade": "🥇 골드",
-        "short_grade": "",
-        "is_pref": false
-      },
-      {
-        "code": "027410",
-        "name": "BGF",
-        "market": "KOSPI",
-        "price": 4450.0,
-        "mcap": 4259,
-        "total_score": 64,
-        "short_term_score": 1,
+        "price": 68400.0,
+        "mcap": 14482,
+        "total_score": 65,
+        "short_term_score": 7,
         "grade": "🥇 골드",
         "short_grade": "",
         "is_pref": false
       }
     ],
     "short_ready": [
+      {
+        "code": "010780",
+        "name": "아이에스동서",
+        "market": "KOSPI",
+        "price": 28800.0,
+        "mcap": 8693,
+        "total_score": 43,
+        "short_term_score": 20,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
       {
         "code": "389470",
         "name": "인벤티지랩",
@@ -133,9 +134,9 @@
         "market": "KOSPI",
         "price": 258500.0,
         "mcap": 6016,
-        "total_score": 57,
+        "total_score": 49,
         "short_term_score": 16,
-        "grade": "🥈 실버",
+        "grade": "⚪ DART無 (참고용)",
         "short_grade": "⚡ 단기관찰",
         "is_pref": true
       },
@@ -196,18 +197,6 @@
         "total_score": 47,
         "short_term_score": 15,
         "grade": "🥈 실버",
-        "short_grade": "⚡ 단기관찰",
-        "is_pref": false
-      },
-      {
-        "code": "033640",
-        "name": "네패스",
-        "market": "KOSDAQ",
-        "price": 33950.0,
-        "mcap": 7828,
-        "total_score": 42,
-        "short_term_score": 15,
-        "grade": "⚪ 관찰",
         "short_grade": "⚡ 단기관찰",
         "is_pref": false
       }
