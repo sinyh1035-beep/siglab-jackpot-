@@ -1,0 +1,193 @@
+{
+  "date": "2026-06-01",
+  "value_version": "v6.0",
+  "value_updated": "2026-06-01 23:24:37",
+  "categories": {
+    "diamond": [],
+    "gold": [
+      {
+        "code": "009450",
+        "name": "경동나비엔",
+        "market": "KOSPI",
+        "price": 69000.0,
+        "mcap": 10052,
+        "total_score": 72,
+        "short_term_score": 7,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "012510",
+        "name": "더존비즈온",
+        "market": "KOSPI",
+        "price": 120100.0,
+        "mcap": 34977,
+        "total_score": 71,
+        "short_term_score": 11,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "005810",
+        "name": "풍산홀딩스",
+        "market": "KOSPI",
+        "price": 38850.0,
+        "mcap": 5601,
+        "total_score": 66,
+        "short_term_score": 3,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "020000",
+        "name": "한섬",
+        "market": "KOSPI",
+        "price": 22050.0,
+        "mcap": 4735,
+        "total_score": 66,
+        "short_term_score": 4,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "456040",
+        "name": "OCI",
+        "market": "KOSPI",
+        "price": 123000.0,
+        "mcap": 11011,
+        "total_score": 64,
+        "short_term_score": 7,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      }
+    ],
+    "short_ready": [
+      {
+        "code": "041920",
+        "name": "메디아나",
+        "market": "KOSDAQ",
+        "price": 17480.0,
+        "mcap": 3250,
+        "total_score": 26,
+        "short_term_score": 17,
+        "grade": "⚪ DART無 (참고용)",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "005389",
+        "name": "현대차3우B",
+        "market": "KOSPI",
+        "price": 275000.0,
+        "mcap": 6400,
+        "total_score": 43,
+        "short_term_score": 16,
+        "grade": "⚪ DART無 (참고용)",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": true
+      },
+      {
+        "code": "006280",
+        "name": "녹십자",
+        "market": "KOSPI",
+        "price": 137700.0,
+        "mcap": 16092,
+        "total_score": 39,
+        "short_term_score": 16,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "051900",
+        "name": "LG생활건강",
+        "market": "KOSPI",
+        "price": 248500.0,
+        "mcap": 37998,
+        "total_score": 57,
+        "short_term_score": 15,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "187870",
+        "name": "디바이스",
+        "market": "KOSDAQ",
+        "price": 23100.0,
+        "mcap": 3180,
+        "total_score": 56,
+        "short_term_score": 15,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "058650",
+        "name": "세아홀딩스",
+        "market": "KOSPI",
+        "price": 156100.0,
+        "mcap": 6622,
+        "total_score": 43,
+        "short_term_score": 15,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "095610",
+        "name": "테스",
+        "market": "KOSDAQ",
+        "price": 111300.0,
+        "mcap": 21547,
+        "total_score": 37,
+        "short_term_score": 15,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "127120",
+        "name": "제이에스링크",
+        "market": "KOSDAQ",
+        "price": 42850.0,
+        "mcap": 14835,
+        "total_score": 37,
+        "short_term_score": 15,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "397030",
+        "name": "에이프릴바이오",
+        "market": "KOSDAQ",
+        "price": 60000.0,
+        "mcap": 14048,
+        "total_score": 34,
+        "short_term_score": 15,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "332570",
+        "name": "PS일렉트로닉스",
+        "market": "KOSDAQ",
+        "price": 11590.0,
+        "mcap": 5413,
+        "total_score": 32,
+        "short_term_score": 15,
+        "grade": "⚪ DART無 (참고용)",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      }
+    ],
+    "combo": []
+  }
+}
