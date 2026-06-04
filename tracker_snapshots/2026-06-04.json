@@ -1,0 +1,218 @@
+{
+  "date": "2026-06-04",
+  "value_version": "v6.0",
+  "value_updated": "2026-06-03 23:53:14",
+  "categories": {
+    "diamond": [],
+    "gold": [
+      {
+        "code": "009450",
+        "name": "경동나비엔",
+        "market": "KOSPI",
+        "price": 68600.0,
+        "mcap": 9994,
+        "total_score": 76,
+        "short_term_score": 7,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "023530",
+        "name": "롯데쇼핑",
+        "market": "KOSPI",
+        "price": 154100.0,
+        "mcap": 43592,
+        "total_score": 71,
+        "short_term_score": 22,
+        "grade": "🥇 골드",
+        "short_grade": "🚀 단기준비",
+        "is_pref": false
+      },
+      {
+        "code": "012510",
+        "name": "더존비즈온",
+        "market": "KOSPI",
+        "price": 120000.0,
+        "mcap": 34948,
+        "total_score": 66,
+        "short_term_score": 11,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "005810",
+        "name": "풍산홀딩스",
+        "market": "KOSPI",
+        "price": 38700.0,
+        "mcap": 5579,
+        "total_score": 66,
+        "short_term_score": 5,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "020000",
+        "name": "한섬",
+        "market": "KOSPI",
+        "price": 23350.0,
+        "mcap": 5014,
+        "total_score": 66,
+        "short_term_score": 4,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      },
+      {
+        "code": "192080",
+        "name": "더블유게임즈",
+        "market": "KOSPI",
+        "price": 69900.0,
+        "mcap": 14800,
+        "total_score": 65,
+        "short_term_score": 7,
+        "grade": "🥇 골드",
+        "short_grade": "",
+        "is_pref": false
+      }
+    ],
+    "short_ready": [
+      {
+        "code": "023530",
+        "name": "롯데쇼핑",
+        "market": "KOSPI",
+        "price": 154100.0,
+        "mcap": 43592,
+        "total_score": 71,
+        "short_term_score": 22,
+        "grade": "🥇 골드",
+        "short_grade": "🚀 단기준비",
+        "is_pref": false
+      },
+      {
+        "code": "005389",
+        "name": "현대차3우B",
+        "market": "KOSPI",
+        "price": 264000.0,
+        "mcap": 6144,
+        "total_score": 45,
+        "short_term_score": 21,
+        "grade": "⚪ DART無 (참고용)",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": true
+      },
+      {
+        "code": "462870",
+        "name": "시프트업",
+        "market": "KOSPI",
+        "price": 30450.0,
+        "mcap": 17860,
+        "total_score": 30,
+        "short_term_score": 20,
+        "grade": "⚪ DART無 (참고용)",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "041830",
+        "name": "인바디",
+        "market": "KOSDAQ",
+        "price": 42750.0,
+        "mcap": 5763,
+        "total_score": 47,
+        "short_term_score": 18,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "251270",
+        "name": "넷마블",
+        "market": "KOSPI",
+        "price": 44900.0,
+        "mcap": 36788,
+        "total_score": 20,
+        "short_term_score": 18,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "241770",
+        "name": "메카로",
+        "market": "KOSDAQ",
+        "price": 37250.0,
+        "mcap": 3796,
+        "total_score": 55,
+        "short_term_score": 17,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "02826K",
+        "name": "삼성물산우B",
+        "market": "KOSPI",
+        "price": 251500.0,
+        "mcap": 3690,
+        "total_score": 48,
+        "short_term_score": 16,
+        "grade": "⚪ DART無 (참고용)",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": true
+      },
+      {
+        "code": "178320",
+        "name": "서진시스템",
+        "market": "KOSDAQ",
+        "price": 72600.0,
+        "mcap": 46196,
+        "total_score": 46,
+        "short_term_score": 16,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "145990",
+        "name": "삼양사",
+        "market": "KOSPI",
+        "price": 43100.0,
+        "mcap": 4445,
+        "total_score": 45,
+        "short_term_score": 16,
+        "grade": "🥈 실버",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      },
+      {
+        "code": "302440",
+        "name": "SK바이오사이언스",
+        "market": "KOSPI",
+        "price": 41300.0,
+        "mcap": 32402,
+        "total_score": 31,
+        "short_term_score": 16,
+        "grade": "⚪ 관찰",
+        "short_grade": "⚡ 단기관찰",
+        "is_pref": false
+      }
+    ],
+    "combo": [
+      {
+        "code": "023530",
+        "name": "롯데쇼핑",
+        "market": "KOSPI",
+        "price": 154100.0,
+        "mcap": 43592,
+        "total_score": 71,
+        "short_term_score": 22,
+        "grade": "🥇 골드",
+        "short_grade": "🚀 단기준비",
+        "is_pref": false
+      }
+    ]
+  }
+}
